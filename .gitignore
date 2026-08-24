@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+searxng/searxng.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+node_modules/.cache/
+
+# Node
+node_modules/
+dist/
+
+# Misc
+*.log
+.DS_Store
+workspace/

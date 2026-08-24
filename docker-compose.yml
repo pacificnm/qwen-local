@@ -1,0 +1,112 @@
+# chat.folding-os.com — Phase 1 (Infra + Auth). See docs/MASTER_SPEC.md.
+#
+# Access model:
+# - LAN: frontend publishes host port 3000 (free on the host; 8000/8080 are
+#   taken by other host apps) so LAN devices reach http://192.168.88.10:3000
+#   directly — no Cloudflare hop for local use.
+# - Remote: the pre-existing Cloudflare tunnel (token mode) stays for
+#   off-site access; its dashboard route `chat.folding-os.com` targets
+#   `http://frontend:3000`; the `cloudflared_default` network (attached below
+#   as `cloudflare`, the tunnel's existing network) is where Docker DNS
+#   resolves that name.
+# - `.env` is the single source of values for secrets/config. Services that
+#   read app values get it verbatim via `env_file:` (file contents are never
+#   interpolated through the shell, so host-shell exports elsewhere are
+#   irrelevant — no `${VAR}` substitution anywhere in this file).
+# - Host services (Postgres 5432, Ollama 11434) live at the host LAN IP
+#   192.168.88.10 (pg_hba allows 192.168.88.0/24). `HOST_OVERRIDE` is injected
+#   as container process env so it overrides the `.env` `localhost` values;
+#   backend/app/core/settings.py re-points the DB/Ollama URLs with it.
+#   No credentials are duplicated outside `.env`.
+
+name: chat
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: qwen-chat-backend:latest
+    container_name: chat
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # container -> host reachability only; .env keeps localhost for host runs
+      HOST_OVERRIDE: "192.168.88.10"
+      # Absolute container path for git clones (bind mount below); overrides
+      # the relative default in app/repos/sync.py for host-local runs.
+      WORKSPACE_DIR: "/srv/app/workspace"
+    volumes:
+      # git clones for the ingestion pipeline; host dir pre-chowned to 1000
+      # (the container `appuser` UID) so it is writable.
+      - ./workspace:/srv/app/workspace
+      # Phase 5: the host Docker daemon — the backend runs the ephemeral
+      # code-interpreter sandboxes via the docker CLI baked into its image.
+      # Access is group-gated: the image's appuser is in gid 988 (the host
+      # `docker` group; the socket is 0660 root:docker). No port published.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - qwen
+      - cloudflare
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+    image: qwen-chat-frontend:latest
+    container_name: chat-frontend
+    restart: unless-stopped
+    # Direct LAN access: http://192.168.88.10:3000 (see Access model above).
+    ports:
+      - "3000:3000"
+    # Reads no runtime config: the app is static + nginx.conf is baked in.
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - qwen
+      - cloudflare
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: chat-searxng
+    restart: unless-stopped
+    # Third-party service: gets only its own secret (searxng/searxng.env),
+    # never the app's .env.
+    env_file:
+      - searxng/searxng.env
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    # searxng image convention: "true" = start its normal webapp entrypoint
+    command: "true"
+    networks:
+      - qwen
+
+  # Phase 5: build-only service — bakes the hardened code-interpreter runtime
+  # image (sandbox/Dockerfile) that the backend's code_interpreter tool runs
+  # via `docker run` over the host socket. It is NEVER started (hidden behind
+  # a profile so plain `up` ignores it); refresh the image with:
+  #   docker compose build sandbox-image
+  # The backend's ensure_image() falls back to the same build in dev runs.
+  sandbox-image:
+    build:
+      context: ./sandbox
+    image: qwen-code-sandbox:latest
+    profiles:
+      - build-only
+
+networks:
+  qwen:
+  cloudflare:
+    external: true
+    # The cloudflared container's existing network — must exist before `up`.
+    name: cloudflared_default

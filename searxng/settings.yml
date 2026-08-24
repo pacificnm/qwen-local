@@ -1,0 +1,25 @@
+# SearXNG — local web search for the assistant's WebSearch tool (Phase 3).
+# Consumed only by the backend container (http://searxng:8080) over the `qwen`
+# compose network. Public exposure: none (tunnel → frontend only).
+use_default_settings: true
+
+server:
+  # The searxng image entrypoint substitutes the real secret from the
+  # SEARXNG_SECRET env (searxng/searxng.env) at startup.
+  secret_key: "__SEARXNG_SECRET__"
+  port: 8080
+  bind_address: "0.0.0.0"
+  limiter: false          # backend-to-backend API traffic on a private network
+  image_proxy: false
+  public_instance: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  # JSON for the backend WebSearch tool; html for humans poking it directly.
+  formats:
+    - html
+    - json
+
+ui:
+  static_use_hash: true

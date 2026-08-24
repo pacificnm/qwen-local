@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/tmp/qcb-venv/bin/python *)",
+      "Bash(psql *)",
+      "Bash(env)",
+      "Bash(docker compose up *)",
+      "Bash(python3 *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)"
+    ]
+  },
+  "$version": 4
+}

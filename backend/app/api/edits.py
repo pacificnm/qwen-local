@@ -1,0 +1,132 @@
+"""Phase 4: editor file access + Commit to GitHub (branch → commit → PR).
+
+File reads serve the Monaco pane (original content for the diff view).
+`POST /commit` implements docs/API.md "Commit / PR": create branch from the
+upstream default, commit the edited file, push, optionally open a PR.
+"""
+
+import asyncio
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user, get_db
+from app.core.settings import get_settings
+from app.db.models import Repository, User
+from app.repos import gitops
+from app.repos.errors import (
+    FileNotFound,
+    GitError,
+    GithubApiError,
+    InvalidBranch,
+    SyncError,
+)
+from app.repos.sync import workspace
+
+router = APIRouter(prefix="/api", tags=["edits"])
+
+MAX_FILE_READ = 1 * 1024 * 1024  # 1 MB hard cap for the editor (spec §5 edge case)
+MAX_CONTENT = 1 * 1024 * 1024  # same ceiling on the content we commit
+
+
+class CommitIn(BaseModel):
+    repo_id: uuid.UUID
+    file_path: str = Field(min_length=1, max_length=1024)
+    content: str = Field(min_length=1, max_length=MAX_CONTENT)
+    base_ref: str | None = None  # accepted for API.md compatibility; commits always branch from upstream HEAD
+    branch: str = Field(default="qwen-assist/edits", min_length=1)
+    commit_message: str = Field(min_length=1, max_length=500)
+    open_pr: bool = False
+    pr_title: str | None = Field(default=None, max_length=300)
+    pr_body: str | None = Field(default=None, max_length=20000)
+
+
+async def _get_repo(db: AsyncSession, repo_id: uuid.UUID) -> Repository:
+    repo = await db.get(Repository, repo_id)
+    if repo is None:
+        raise HTTPException(status_code=404, detail="Repository not linked")
+    return repo
+
+
+@router.get("/repos/{repo_id}/files")
+async def list_repo_files(
+    repo_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    repo = await _get_repo(db, repo_id)
+    repo_dir = gitops.workspace_repo_dir(workspace(), repo.github_full_name)
+    if not repo_dir.joinpath(".git").is_dir():
+        raise HTTPException(status_code=502, detail="workspace clone missing — sync the repo first")
+    files = await gitops.list_file_paths(repo_dir)
+    return {"repo_id": str(repo.id), "files": [{"path": p} for p in sorted(files)]}
+
+
+@router.get("/repos/{repo_id}/file")
+async def read_repo_file(
+    repo_id: uuid.UUID,
+    path: str,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    repo = await _get_repo(db, repo_id)
+    repo_dir = gitops.workspace_repo_dir(workspace(), repo.github_full_name)
+    try:
+        content = await asyncio.to_thread(gitops.read_file, repo_dir, path)
+    except FileNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if len(content.encode("utf-8")) > MAX_FILE_READ:
+        raise HTTPException(status_code=413, detail="file exceeds the 1 MB editor limit")
+    return {"path": path, "content": content}
+
+
+@router.post("/commit", status_code=201)
+async def commit_to_github(
+    body: CommitIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    repo = await _get_repo(db, body.repo_id)
+    pat = get_settings().github_pat
+    if not pat:
+        raise HTTPException(status_code=503, detail="GitHub PAT is not configured")
+
+    branch = body.branch.strip()
+    if not gitops.is_valid_branch(branch):
+        raise HTTPException(status_code=422, detail="branch name is not a valid git ref name")
+
+    pr_title = (body.pr_title or "").strip() or body.commit_message.strip()
+    pr_body = (body.pr_body or "").strip() or (
+        f"## Summary\n\n{body.commit_message.strip()}\n\n## Files\n\n- `{body.file_path}`\n"
+    )
+    try:
+        result = await gitops.commit_file(
+            workspace=workspace(),
+            full_name=repo.github_full_name,
+            pat=pat,
+            file_path=body.file_path,
+            content=body.content,
+            branch=branch,
+            commit_message=body.commit_message,
+            open_pr=body.open_pr,
+            pr_title=pr_title,
+            pr_body=pr_body,
+        )
+    except FileNotFound as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InvalidBranch as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GithubApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except SyncError as exc:
+        raise HTTPException(status_code=502, detail=f"git operation failed: {exc}") from exc
+
+    return {
+        "branch": result.branch,
+        "commit_sha": result.commit_sha,
+        "pr_url": result.pr_url,
+    }
