@@ -56,3 +56,6 @@ Public hostname (Cloudflare Zero Trust → Tunnels → Public Hostname):
 
 Phase 1 API surface: `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`,
 `GET /api/models`, `GET /api/health` (db / ollama / searxng).
+
+## Contributing
+New contributors: run the backend test suite with `cd backend && uv run pytest` before opening a PR — see `backend/tests/` for the expected behavior of each module.
