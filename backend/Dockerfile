@@ -7,8 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /srv/app
 
 # git: repo clones for ingestion (Phase 2) + branch/commit/PR work (Phase 4)
+# libasound2: soundfile (imported via the Qwen-Agent chain) needs the ALSA
+# shared lib at import time; without it the backend fails to start.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 # docker CLI (static binary, pinned to the host daemon's major version) for

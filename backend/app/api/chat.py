@@ -20,15 +20,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
+from app.agents import qwen_assistant
 from app.api.conversations import _get_owned_conv
 from app.api.deps import get_current_user, get_db
 from app.core.settings import get_settings
 from app.db.models import Conversation, Message, Repository, User
 from app.db.session import get_session_factory
-from app.llm import agent
-from app.llm.client import LLMClient
 from app.llm.prompts import BASE_SYSTEM, build_system
-from app.llm.tools import get_tools
 from app.repos.errors import SyncError
 from app.repos.retrieval import retrieve_chunks
 
@@ -113,20 +111,19 @@ async def chat_stream(
     assistant_seq = int(next_seq) + 1
     is_first_exchange = int(prior_count) == 0
 
-    # RAG for repo-bound conversations: retrieve top-8 before streaming; a dead
-    # embed path fails fast (502) instead of opening a broken stream.
+    # A bound repo serves two purposes here: RAG context (top-8 chunks) and
+    # the target of the agent's repo tools (read/write/edit/commit).
     system = BASE_SYSTEM
-    if conv.repo_id is not None:
-        repo = await db.get(Repository, conv.repo_id)
-        if repo is not None:
-            try:
-                chunks = await retrieve_chunks(db, repo_id=repo.id, query=body.message)
-            except SyncError as exc:
-                raise HTTPException(
-                    status_code=502, detail=f"search index unavailable: {exc}"
-                ) from exc
-            system = build_system(repo.github_full_name, chunks)
-        # repo vanished (FK SET NULL) → fall back to general chat
+    repo_obj = await db.get(Repository, conv.repo_id) if conv.repo_id is not None else None
+    if repo_obj is not None:
+        try:
+            chunks = await retrieve_chunks(db, repo_id=repo_obj.id, query=body.message)
+        except SyncError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"search index unavailable: {exc}"
+            ) from exc
+        system = build_system(repo_obj.github_full_name, chunks)
+    # repo vanished (FK SET NULL) → general chat without repo tools
 
     history = (
         (
@@ -157,6 +154,7 @@ async def chat_stream(
             model=model,
             system=system,
             chat_history=chat_history,
+            repo=repo_obj,
             state=_TurnState(),
             run=run,
             is_first_exchange=is_first_exchange,
@@ -173,6 +171,7 @@ async def _stream(
     model: str,
     system: str,
     chat_history: list[dict],
+    repo: Repository | None,
     state: _TurnState,
     run: _ActiveRun,
     is_first_exchange: bool,
@@ -199,12 +198,11 @@ async def _stream(
 
     async def run_turn_wrapper():
         try:
-            await agent.run_turn(
-                client=LLMClient(),
+            await qwen_assistant.run_turn(
                 model=model,
                 system=system,
                 history=chat_history,
-                tools=get_tools(),
+                repo=repo,
                 emit=emit,
                 cancel=run.cancel,
             )

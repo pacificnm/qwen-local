@@ -58,4 +58,6 @@ Phase 1 API surface: `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth
 `GET /api/models`, `GET /api/health` (db / ollama / searxng).
 
 ## Contributing
-New contributors: run the backend test suite with `cd backend && uv run pytest` before opening a PR — see `backend/tests/` for the expected behavior of each module.
+New contributors: set up a venv and run the backend test suite before opening a PR —
+`cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m pytest tests -q`.
+See `backend/tests/` for the expected behavior of each module.

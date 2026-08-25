@@ -13,3 +13,21 @@ tree-sitter-javascript>=0.23
 tree-sitter-typescript>=0.23
 tree-sitter-python>=0.23
 tree-sitter-sql>=0.3
+qwen-agent==0.0.34
+# qwen-agent 0.0.34 does not declare these import-time deps (packaging gap
+# in the upstream package); list them explicitly so the image builds:
+openai>=1.40
+numpy>=1.26
+soundfile>=0.12
+tqdm>=4.66
+python-dateutil>=2.9
+six>=1.16
+json5>=0.9
+jsonlines>=4.0
+jsonschema>=4.21
+pillow>=10.0
+tiktoken>=0.7
+dashscope>=1.20
+python-dotenv>=1.0
+requests>=2.31
+eval-type-backport>=0.2
