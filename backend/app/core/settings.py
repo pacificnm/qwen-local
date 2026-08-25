@@ -63,6 +63,14 @@ class Settings(BaseSettings):
 
     # --- GitHub / search / sandbox ---
     github_pat: str = ""
+    # Identity that Phase 4 commits are authored under. The backend runs as an
+    # unprivileged container user with no ambient git config, so it must set
+    # the committer explicitly (otherwise `git commit` fails with
+    # "Author identity unknown"). Overridable via GIT_AUTHOR_NAME /
+    # GIT_AUTHOR_EMAIL (.env or process env); the defaults attribute the change
+    # to the assistant.
+    git_author_name: str = "Qwen Assist"
+    git_author_email: str = "qwen-assist@users.noreply.github.com"
     # Workspace for git clones (relative to the repo root; docker-compose
     # bind-mounts ./workspace over /srv/app/workspace for persistence).
     workspace_dir: str = "workspace"

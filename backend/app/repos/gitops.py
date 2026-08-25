@@ -15,6 +15,8 @@ from pathlib import Path
 
 import httpx
 
+from app.core.settings import get_settings
+
 from .errors import FileNotFound, GitError, GithubApiError, InvalidBranch
 
 FULL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
@@ -50,13 +52,21 @@ def _scrub(message: str, pat: str) -> str:
     return message.replace(pat, "[redacted]") if pat else message
 
 
-async def _run(args: list[str], pat: str, cwd: str | None = None) -> str:
+async def _run(
+    args: list[str],
+    pat: str,
+    cwd: str | None = None,
+    env_extra: dict[str, str] | None = None,
+) -> str:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    if env_extra:
+        env.update(env_extra)
     proc = await asyncio.create_subprocess_exec(
         *args,
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        env=env,
     )
     out, err = await proc.communicate()
     if proc.returncode != 0:
@@ -71,22 +81,52 @@ class RepoFile:
     blob_sha: str
 
 
+async def _upstream_default_branch(repo_dir: Path) -> str | None:
+    """Upstream default branch name via the `origin/HEAD` symref (set by
+    clone), or None when it cannot be resolved."""
+    try:
+        out = await _run(
+            ["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"],
+            pat="",
+            cwd=str(repo_dir),
+        )
+    except GitError:
+        return None
+    name = out.strip()
+    if name.startswith("origin/"):
+        name = name[len("origin/") :]
+    return name or None
+
+
+async def _current_branch(repo_dir: Path) -> str:
+    branch = (await _run(["git", "symbolic-ref", "--short", "HEAD"], pat="", cwd=str(repo_dir))).strip()
+    return branch or "HEAD"
+
+
 async def ensure_repo(workspace: Path, full_name: str, pat: str) -> tuple[Path, str]:
-    """Shallow-clone if missing, otherwise refresh; returns (repo_dir, branch)."""
+    """Shallow-clone if missing, otherwise refresh; returns (repo_dir, branch).
+
+    The returned `branch` is the upstream DEFAULT branch and the worktree is
+    left checked out on it: Phase 4 branch creation and PR bases must not
+    depend on which branch a previous run left the shared worktree on.
+    """
     repo_dir = workspace_repo_dir(workspace, full_name)
     if (repo_dir / ".git").is_dir():
         # Refresh in place. `reset --hard` + `clean -fd` is intended: a sync
         # re-points the working copy at upstream HEAD (Phase 4 commits happen
         # on branches, not on the sync checkout).
         await _run(["git", "fetch", "--depth", "1", "origin", "HEAD"], pat=pat, cwd=str(repo_dir))
+        branch = await _upstream_default_branch(repo_dir) or await _current_branch(repo_dir)
+        # A previous Phase 4 run may have parked the worktree on a feature
+        # branch — switch back to the true default before aligning upstream.
+        await _run(["git", "checkout", "-f", branch], pat=pat, cwd=str(repo_dir))
         await _run(["git", "reset", "--hard", "FETCH_HEAD"], pat=pat, cwd=str(repo_dir))
         await _run(["git", "clean", "-fd"], pat=pat, cwd=str(repo_dir))
-        branch = (await _run(["git", "symbolic-ref", "--short", "HEAD"], pat=pat, cwd=str(repo_dir))).strip()
     else:
         workspace.mkdir(parents=True, exist_ok=True)
         await _run(["git", "clone", "--depth", "1", _clone_url(full_name, pat), str(repo_dir)], pat=pat)
-        branch = (await _run(["git", "symbolic-ref", "--short", "HEAD"], pat=pat, cwd=str(repo_dir))).strip()
-    return repo_dir, branch or "HEAD"
+        branch = await _upstream_default_branch(repo_dir) or await _current_branch(repo_dir)
+    return repo_dir, branch
 
 
 async def list_tree(repo_dir: Path) -> list[RepoFile]:
@@ -151,6 +191,24 @@ class CommitResult:
     branch: str
     commit_sha: str
     pr_url: str | None
+
+
+def _commit_identity() -> dict[str, str]:
+    """Env giving `git commit` an explicit author/committer identity.
+
+    The backend runs as a container user with no ambient git config, so without
+    this `git commit` fails with "Author identity unknown". Identity comes from
+    Settings (GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL).
+    """
+    s = get_settings()
+    env: dict[str, str] = {}
+    if s.git_author_name:
+        env["GIT_AUTHOR_NAME"] = s.git_author_name
+        env["GIT_COMMITTER_NAME"] = s.git_author_name
+    if s.git_author_email:
+        env["GIT_AUTHOR_EMAIL"] = s.git_author_email
+        env["GIT_COMMITTER_EMAIL"] = s.git_author_email
+    return env
 
 
 async def _local_ref_exists(repo_dir: Path, ref: str) -> bool:
@@ -248,7 +306,12 @@ async def commit_file(
         name = await _create_branch(repo_dir, pat, branch)
         await asyncio.to_thread(target.write_text, content, encoding="utf-8")
         await _run(["git", "add", "--", file_path], pat=pat, cwd=str(repo_dir))
-        await _run(["git", "commit", "-m", commit_message], pat=pat, cwd=str(repo_dir))
+        await _run(
+            ["git", "commit", "-m", commit_message],
+            pat=pat,
+            cwd=str(repo_dir),
+            env_extra=_commit_identity(),
+        )
         sha = (await _run(["git", "rev-parse", "HEAD"], pat=pat, cwd=str(repo_dir))).strip()
         await _run(["git", "push", "origin", name], pat=pat, cwd=str(repo_dir))
 
@@ -258,8 +321,70 @@ async def commit_file(
                 full_name, pat, pr_title, pr_body, name, default_branch
             )
 
-        # Leave the shared worktree back on the default branch; the commit is
-        # preserved on the remote branch (and in the local ref).
-        await _run(["git", "checkout", "--", default_branch], pat=pat, cwd=str(repo_dir))
+        # Leave the shared worktree back on the default branch — a branch
+        # *switch* (`checkout -- <name>` would parse the name as a pathspec
+        # and fail for branch names). The commit stays on the remote branch.
+        if default_branch != "HEAD":
+            await _run(["git", "checkout", "-f", default_branch], pat=pat, cwd=str(repo_dir))
+
+    return CommitResult(branch=name, commit_sha=sha, pr_url=pr_url)
+
+
+async def commit_workspace(
+    workspace: Path,
+    full_name: str,
+    pat: str,
+    *,
+    message: str,
+    branch: str | None = None,
+    open_pr: bool = False,
+    pr_title: str = "",
+    pr_body: str = "",
+) -> CommitResult:
+    """Commit the agent's working-tree edits: branch → `add -A` → commit → push → optional PR.
+
+    Mirrors `commit_file` but commits whatever the agent changed in the
+    shared worktree (creates, edits, deletes) instead of one file. Crucially
+    it does NOT run the `ensure_repo` refresh first: that path does
+    `reset --hard` + `clean -fd`, which would wipe the very edits being
+    committed. The repo must already be cloned (the chat turn only happens
+    against a synced, bound repo).
+
+    Raises GitError when there is nothing to commit or the clone is missing,
+    InvalidBranch / GithubApiError as usual.
+    """
+    if not message.strip():
+        raise GitError("commit message must not be empty")
+    name = branch or f"qwen-assist/change-{int(time.time())}"
+    if not is_valid_branch(name):
+        raise InvalidBranch("branch name is not a valid git ref name")
+    async with _lock_for(full_name):
+        repo_dir = workspace_repo_dir(workspace, full_name)
+        if not (repo_dir / ".git").is_dir():
+            raise GitError("repository is not cloned yet — run a sync first")
+        status = await _run(["git", "status", "--porcelain"], pat=pat, cwd=str(repo_dir))
+        if not status.strip():
+            raise GitError("nothing to commit: the repository has no pending changes")
+        default_branch = await _upstream_default_branch(repo_dir) or await _current_branch(repo_dir)
+
+        await _create_branch(repo_dir, pat, name)
+        await _run(["git", "add", "-A"], pat=pat, cwd=str(repo_dir))
+        await _run(
+            ["git", "commit", "-m", message],
+            pat=pat,
+            cwd=str(repo_dir),
+            env_extra=_commit_identity(),
+        )
+        sha = (await _run(["git", "rev-parse", "HEAD"], pat=pat, cwd=str(repo_dir))).strip()
+        await _run(["git", "push", "origin", name], pat=pat, cwd=str(repo_dir))
+
+        pr_url = None
+        if open_pr:
+            pr_url = await open_pull_request(
+                full_name, pat, pr_title or message, pr_body, name, default_branch
+            )
+
+        if default_branch != "HEAD":
+            await _run(["git", "checkout", "-f", default_branch], pat=pat, cwd=str(repo_dir))
 
     return CommitResult(branch=name, commit_sha=sha, pr_url=pr_url)

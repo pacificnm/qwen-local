@@ -105,12 +105,57 @@ def test_sql_statements_chunked():
     assert "SELECT" in chunks[0].text
 
 
+# --- markdown (docs ingestion) ---------------------------------------------
+
+
+def test_markdown_units_split():
+    from app.repos.chunking import _markdown_units
+
+    lines = ["intro a", "intro b", "## A", "body a", "## B", "body b"]
+    assert _markdown_units(lines) == [(0, 1), (2, 3), (4, 5)]
+
+
+def test_markdown_chunks_start_at_headings():
+    sections = [
+        f"## Section {i}\n\n"
+        + "\n".join(f"Prose line {i}.{k} describing the project setup." for k in range(14))
+        for i in range(24)
+    ]
+    md = "# Qwen Local\n\nTop-level intro prose.\n\n" + "\n".join(sections)
+    assert estimate_tokens(md) > TARGET_TOKENS
+    chunks = chunk_source(md, "markdown")
+    assert len(chunks) >= 2
+    for c in chunks:
+        # A chunk never starts mid-section: it opens on a heading.
+        assert c.text.splitlines()[0].startswith("#"), f"chunk opens mid-prose: {c.text[:60]!r}"
+        assert c.token_estimate <= 1000
+    combined = "\n".join(c.text for c in chunks)
+    assert "Top-level intro prose." in combined and "## Section 23" in combined
+
+
+def test_markdown_without_headings_falls_back_to_lines():
+    md = ("\n".join(f"Continuous prose line {i} with no heading at all." for i in range(80)))
+    chunks = chunk_source(md, "markdown")
+    assert chunks
+    assert all(c.token_estimate <= 1000 for c in chunks)
+
+
 def test_language_for_supported():
     assert language_for("src/index.ts") == "typescript"
     assert language_for("App.tsx") == "tsx"
     assert language_for("server.py") == "python"
     assert language_for("migrations/001_init.sql") == "sql"
     assert language_for("lib/util.mjs") == "javascript"
+    # docs/config tier now indexes too
+    assert language_for("README.md") == "markdown"
+    assert language_for("docs/spec.MD") == "markdown"
+    assert language_for("docker-compose.yml") == "yaml"
+    assert language_for("pyproject.toml") == "toml"
+    assert language_for("package.json") == "json"
+    assert language_for(".github/workflows/ci.sh") == "shell"
+    assert language_for("service/Dockerfile") == "dockerfile"
+    assert language_for("Makefile") == "makefile"
+    assert language_for("LICENSE") == "license"
 
 
 def test_language_for_skip_rules():
@@ -124,7 +169,10 @@ def test_language_for_skip_rules():
         raise AssertionError("d.ts should be skipped")
     assert language_for("package-lock.json") is None
     assert language_for("src/old.js.map") is None
-    # unsupported languages
+    # unsupported languages / extensions
     assert language_for("main.go") is None
-    assert language_for("style.css") is None
-    assert language_for("README.md") is None
+    assert language_for("image.png") is None
+    assert language_for("data.bin") is None
+    # skip rules still win for docs-tier files
+    assert language_for("node_modules/README.md") is None
+    assert language_for("dist/out.yml") is None

@@ -19,6 +19,24 @@ dependencies = [
   "tree-sitter-typescript>=0.23",
   "tree-sitter-python>=0.23",
   "tree-sitter-sql>=0.3",
+  # Qwen-Agent orchestration (MASTER_SPEC §4.3). 0.0.34 does not declare these
+  # import-time deps (upstream packaging gap), so they are listed explicitly.
+  "qwen-agent==0.0.34",
+  "openai>=1.40",
+  "numpy>=1.26",
+  "soundfile>=0.12",
+  "tqdm>=4.66",
+  "python-dateutil>=2.9",
+  "six>=1.16",
+  "json5>=0.9",
+  "jsonlines>=4.0",
+  "jsonschema>=4.21",
+  "pillow>=10.0",
+  "tiktoken>=0.7",
+  "dashscope>=1.20",
+  "python-dotenv>=1.0",
+  "requests>=2.31",
+  "eval-type-backport>=0.2",
 ]
 
 [project.optional-dependencies]

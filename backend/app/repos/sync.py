@@ -76,6 +76,16 @@ _jobs: dict[uuid.UUID, SyncJob] = {}
 _tasks: dict[uuid.UUID, asyncio.Task] = {}
 
 
+def _plan_to_process(
+    new_map: dict[str, str], old_map: dict[str, str], chunked: set[str]
+) -> list[str]:
+    """Paths to (re)process: content changed, OR a stale file row that has no
+    chunks (files skipped by an earlier, narrower ingestion pass — e.g. docs)."""
+    return sorted(
+        p for p, sha in new_map.items() if old_map.get(p) != sha or p not in chunked
+    )
+
+
 def get_job(repo_id: uuid.UUID) -> SyncJob | None:
     return _jobs.get(repo_id)
 
@@ -128,8 +138,14 @@ async def _run(job: SyncJob) -> None:
                     select(CodeFile.file_path, CodeFile.git_blob_sha).where(CodeFile.repo_id == job.repo_id)
                 )
             ).all()
+            chunked_rows = (
+                await db.execute(
+                    select(CodeChunk.file_path).where(CodeChunk.repo_id == job.repo_id)
+                )
+            ).all()
         old_map = dict(old_rows)
-        to_process = sorted(p for p, sha in new_map.items() if old_map.get(p) != sha)
+        chunked = {r[0] for r in chunked_rows}
+        to_process = _plan_to_process(new_map, old_map, chunked)
         removed = sorted(p for p in old_map if p not in new_map)
         job.files_total = len(to_process)
         job.files_added = sum(1 for p in to_process if p not in old_map)

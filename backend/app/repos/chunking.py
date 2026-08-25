@@ -24,6 +24,34 @@ EXT_LANG = {
     ".tsx": "tsx",
     ".py": "python",
     ".sql": "sql",
+    # Docs/config: no tree-sitter grammar — line-sliced, markdown chunked at
+    # headings. Indexing these is what lets the assistant answer questions
+    # about READMEs, specs, compose files, etc.
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".mdx": "markdown",
+    ".rst": "rst",
+    ".txt": "text",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".toml": "toml",
+    ".json": "json",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".css": "css",
+    ".html": "html",
+    ".htm": "html",
+    ".xml": "xml",
+    ".ini": "ini",
+    ".cfg": "ini",
+}
+
+#: Extensionless files worth indexing (matched on basename).
+_NAME_LANG = {
+    "dockerfile": "dockerfile",
+    "makefile": "makefile",
+    "license": "license",
+    "notice": "license",
 }
 
 _SKIP_DIRS = {
@@ -46,17 +74,14 @@ _SKIP_SUFFIX_RE = re.compile(
 
 def language_for(path: str) -> str | None:
     """Supported language by extension + skip rules; None when the file is skipped."""
-    ext = Path(path).suffix.lower()
-    lang = EXT_LANG.get(ext)
-    if lang is None:
-        return None
     parts = path.split("/")
     if any(p in _SKIP_DIRS for p in parts[:-1]):
         return None
     name = parts[-1]
     if name in _SKIP_FILES or _SKIP_SUFFIX_RE.search(name):
         return None
-    return lang
+    ext = Path(path).suffix.lower()
+    return EXT_LANG.get(ext) or _NAME_LANG.get(name.lower())
 
 
 def estimate_tokens(text: str) -> int:
@@ -77,14 +102,17 @@ _PARSERS: dict[str, object] = {}
 
 
 def _make_parser(language: str) -> object | None:
-    module, attr = {
+    entry = {
         "javascript": ("tree_sitter_javascript", "language_javascript"),
         "jsx": ("tree_sitter_javascript", "language_jsx"),
         "typescript": ("tree_sitter_typescript", "language_typescript"),
         "tsx": ("tree_sitter_typescript", "language_tsx"),
         "python": ("tree_sitter_python", "language_python"),
         "sql": ("tree_sitter_sql", "language_sql"),
-    }[language]
+    }.get(language)
+    if entry is None:  # docs/config languages: line-sliced, never parsed
+        return None
+    module, attr = entry
     try:
         from tree_sitter import Language, Parser
 
@@ -116,6 +144,56 @@ def _top_level_units(text: str, parser: object) -> list[tuple[int, int]] | None:
 
 # --- chunk assembly ---
 
+_MD_HEADING_RE = re.compile(r"^#{1,6}\s")
+
+
+def _markdown_units(lines: list[str]) -> list[tuple[int, int]]:
+    """0-based inclusive line ranges per markdown section (heading starts a
+    unit; text before the first heading is its own unit)."""
+    starts = [i for i, ln in enumerate(lines) if _MD_HEADING_RE.match(ln)]
+    if not starts:
+        return [(0, len(lines) - 1)] if lines else []
+    units: list[tuple[int, int]] = []
+    if starts[0] > 0:
+        units.append((0, starts[0] - 1))
+    for a, b in zip(starts[:-1], starts[1:], strict=True):
+        if a < b:
+            units.append((a, b - 1))
+    units.append((starts[-1], len(lines) - 1))
+    return [u for u in units if u[0] <= u[1]]
+
+
+def _group_units(lines: list[str], units: list[tuple[int, int]]) -> list[Chunk]:
+    """Greedily group boundary units into ~TARGET_TOKENS chunks; oversized
+    units are line-sliced with overlap."""
+    chunks: list[Chunk] = []
+    start: int | None = None
+    end = 0
+    toks = 0
+
+    def flush() -> None:
+        nonlocal start, end, toks
+        if start is not None:
+            chunk = _chunk_lines(lines, start, end)
+            if chunk is not None:
+                chunks.append(chunk)
+        start, end, toks = None, 0, 0
+
+    for s, e in units:
+        unit_tokens = estimate_tokens("\n".join(lines[s : e + 1]))
+        if toks > 0 and toks + unit_tokens > TARGET_TOKENS:
+            flush()
+        if unit_tokens > TARGET_TOKENS:
+            # A single unit over budget: slice it by lines with overlap.
+            flush()
+            chunks.extend(_line_sliced(lines, s, e + 1))
+            continue
+        start = s if start is None else start
+        end = e + 1
+        toks += unit_tokens
+    flush()
+    return chunks
+
 
 def _chunk_lines(lines: list[str], a: int, b: int) -> Chunk | None:
     text = "\n".join(lines[a:b])
@@ -145,7 +223,8 @@ def _line_sliced(lines: list[str], a: int, b: int) -> list[Chunk]:
 
 
 def chunk_source(text: str, language: str) -> list[Chunk]:
-    """Split source into chunks; boundary-aware when parseable, line-sliced otherwise."""
+    """Split source into chunks; boundary-aware where a parser/structure exists
+    (functions/classes for code, headings for markdown), line-sliced otherwise."""
     lines = text.splitlines()
     if not lines or not text.strip():
         return []
@@ -153,37 +232,15 @@ def chunk_source(text: str, language: str) -> list[Chunk]:
         chunk = _chunk_lines(lines, 0, len(lines))
         return [chunk] if chunk else []
 
+    units: list[tuple[int, int]] | None = None
     parser = _get_parser(language)
-    units = _top_level_units(text, parser) if parser is not None else None
-
+    if parser is not None:
+        units = _top_level_units(text, parser)
+    if units is None and language == "markdown":
+        units = _markdown_units(lines)
     if units:
-        chunks: list[Chunk] = []
-        start: int | None = None
-        end = 0
-        toks = 0
-
-        def flush() -> None:
-            nonlocal start, end, toks
-            if start is not None:
-                chunk = _chunk_lines(lines, start, end)
-                if chunk is not None:
-                    chunks.append(chunk)
-            start, end, toks = None, 0, 0
-
-        for s, e in units:
-            unit_tokens = estimate_tokens("\n".join(lines[s : e + 1]))
-            if toks > 0 and toks + unit_tokens > TARGET_TOKENS:
-                flush()
-            if unit_tokens > TARGET_TOKENS:
-                # A single unit over budget: slice it by lines with overlap.
-                flush()
-                chunks.extend(_line_sliced(lines, s, e + 1))
-                continue
-            start = s if start is None else start
-            end = e + 1
-            toks += unit_tokens
-        flush()
-        if chunks:
-            return chunks
+        grouped = _group_units(lines, units)
+        if grouped:
+            return grouped
 
     return _line_sliced(lines, 0, len(lines))
