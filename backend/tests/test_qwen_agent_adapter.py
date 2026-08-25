@@ -152,6 +152,131 @@ async def test_run_turn_skips_function_results():
     assert not any("tool result" in d.get("text", "") for n, d in events)
 
 
+async def test_run_turn_final_answer_after_tool_budget(monkeypatch):
+    """The model spent its whole per-run LLM-call budget on tool calls:
+    the turn's last cumulative list ends on a FUNCTION (tool result) with
+    NO assistant answer. The adapter must still end with an answer, via
+    one final tool-less LLM call."""
+    from qwen_agent.llm.schema import FUNCTION
+
+    a1 = {"role": "assistant", "content": "Let me read more files."}
+    f1 = {"role": FUNCTION, "name": "repo_read_file", "content": "file body …"}
+    seen_history: list = []
+
+    def fake_final(assistant, history):
+        seen_history.append(list(history))
+        return iter([[{"role": "assistant", "content": "Here is my review of the files."}]])
+
+    monkeypatch.setattr(qa, "final_answer_stream", fake_final)
+    fake = FakeAssistant(yields=[
+        [a1],
+        [a1, f1],   # final cumulative list: ends on the tool result, no answer
+        [a1, f1],
+    ])
+    status, events = await _collect({"assistant": fake})
+    assert status == "done"
+    seen = [m for m in seen_history if m][-1]
+    # The fallback call must be re-anchored onto the input messages —
+    # FnCallAgent's yields are only the accumulated suffix, and
+    # Qwen-Agent's validator 400s a request that starts on an
+    # assistant/tool message ("must start with a user message").
+    assert seen[0] == {"role": "system", "content": "SYS"}
+    assert seen[1] == {"role": "user", "content": "hi"}
+    assert seen[-1]["role"] == FUNCTION
+    tokens = "".join(d["text"] for n, d in events if n == "token")
+    assert "Here is my review of the files." in tokens
+    assert "file body …" not in tokens  # tool results stay out of the answer
+    assert len([n for n, _ in events if n in ("done", "cancelled", "error")]) == 1
+
+
+async def test_run_turn_final_answer_after_thinking_only_tail(monkeypatch):
+    """The live 4B shape: after the last tool result the model's final call
+    is thinking-only — the loop ends on an assistant message with EMPTY
+    content (no tokens were streamed). The adapter must force a final
+    answer from the same history."""
+    from qwen_agent.llm.schema import FUNCTION
+
+    a1 = {"role": "assistant", "content": "", "reasoning_content": "t1"}
+    f1 = {"role": FUNCTION, "name": "repo_read_file", "content": "file body …"}
+    a2 = {"role": "assistant", "content": "", "reasoning_content": "t1, more thinking"}
+    fake = FakeAssistant(yields=[
+        [a1],
+        [a1, f1],
+        [a1, f1, a2],   # final call is thinking-only: empty content ends the loop
+        [a1, f1, a2],
+    ])
+    monkeypatch.setattr(
+        qa, "final_answer_stream",
+        lambda assistant, history: iter([[{"role": "assistant", "content": "Review complete."}]])
+    )
+    status, events = await _collect({"assistant": fake})
+    assert status == "done"
+    assert "".join(d["text"] for n, d in events if n == "token") == "Review complete."
+    # thinking suffixes are tracked per message slot — slot 2 (a2) was new,
+    # so its full reasoning text is a single event.
+    assert [d["text"] for n, d in events if n == "thinking"] == ["t1", "t1, more thinking"]
+
+
+def test_needs_final_answer_shapes():
+    from qwen_agent.llm.schema import FUNCTION
+
+    fn = {"role": FUNCTION, "name": "t", "content": "r"}
+    empty = {"role": "assistant", "content": ""}
+    blank = {"role": "assistant", "content": "   "}
+    ok = {"role": "assistant", "content": "review done"}
+    assert qa._needs_final_answer([{"role": "assistant", "content": "preamble"}, fn])
+    assert qa._needs_final_answer([ok, fn])
+    assert qa._needs_final_answer([empty])
+    assert qa._needs_final_answer([ok, empty])
+    assert qa._needs_final_answer([blank])
+    assert not qa._needs_final_answer([fn, ok])
+    assert not qa._needs_final_answer([ok])
+
+
+def test_final_answer_stream_strips_dangling_empty_assistant():
+    """A thinking-only tail leaves a dangling empty assistant message; it
+    carries no content and must not be the last request message of the
+    fallback call."""
+    from qwen_agent.llm.schema import FUNCTION
+
+    class _A:
+        def __init__(self):
+            self.calls: list = []
+
+        def _call_llm(self, messages, functions, stream, extra_generate_cfg):
+            self.calls.append((list(messages), functions))
+            return iter([[{"role": "assistant", "content": "done"}]])
+
+    a = _A()
+    history = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "review the readme"},
+        {"role": "assistant", "content": ""},
+        {"role": FUNCTION, "name": "repo_read_file", "content": "body"},
+        {"role": "assistant", "content": "   ", "reasoning_content": "think"},
+    ]
+    out = list(qa.final_answer_stream(a, history))
+    msgs, functions = a.calls[0]
+    assert functions is None
+    assert msgs[-1] == history[3]  # ends on the tool result, tail stripped
+    assert out == [[{"role": "assistant", "content": "done"}]]
+
+
+async def test_run_turn_no_final_answer_when_turn_ends_naturally(monkeypatch):
+    """When the turn legitimately ends with an assistant answer, the
+    budget-exhaustion fallback must NOT add another LLM call."""
+
+    def boom(*a, **kw):
+        raise AssertionError("final_answer_stream must not be called")
+
+    monkeypatch.setattr(qa, "final_answer_stream", boom)
+    a1 = {"role": "assistant", "content": "ok"}
+    fake = FakeAssistant(yields=[[a1], [a1]])
+    status, events = await _collect({"assistant": fake})
+    assert status == "done"
+    assert [d["text"] for n, d in events if n == "token"] == ["ok"]
+
+
 # --- TurnRuntime bridge --------------------------------------------------------
 
 

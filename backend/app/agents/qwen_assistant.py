@@ -23,6 +23,7 @@ and its response is discarded.
 
 import asyncio
 import logging
+from collections.abc import Iterator
 
 from qwen_agent.agents.assistant import Assistant
 from qwen_agent.llm.oai import TextChatAtOAI
@@ -206,6 +207,49 @@ def _short_error(exc: Exception | None) -> str:
     return text[:300] or "qwen-agent turn failed"
 
 
+def _needs_final_answer(last: list) -> bool:
+    """True when the turn ends with NO assistant answer: the final message
+    is either a tool result (the per-run LLM-call budget ran out right
+    after a tool call) or an assistant message with empty content (the
+    model's last call was thinking-only, which ends the loop with no text)."""
+    tail = last[-1]
+    if _attr(tail, "role") in (FUNCTION, SYSTEM):
+        return True
+    content = _attr(tail, "content")
+    return not (isinstance(content, str) and content.strip())
+
+
+def final_answer_stream(assistant, conversation: list) -> Iterator[list]:
+    """One tool-free LLM call that forces a plain-text answer when the FnCall
+    loop ended without one (see `_needs_final_answer`). Re-asking the same
+    conversation with `functions=None` guarantees a plain-text completion.
+
+    `conversation` must be the FULL message list (system + user + the
+    accumulated assistant/tool messages): Qwen-Agent's own input validator
+    (``_truncate_input_messages_roughly``) rejects a request whose first
+    non-system message is not a user message, while `FnCallAgent.run`
+    yields only the accumulated suffix — never the input messages.
+    """
+    msgs = list(conversation)
+    # Drop the dangling empty assistant message the loop leaves behind for a
+    # thinking-only response — it carries no content and would become the
+    # last request message.
+    while msgs:
+        tail = msgs[-1]
+        if _attr(tail, "role") in (FUNCTION, SYSTEM):
+            break
+        content = _attr(tail, "content")
+        if isinstance(content, str) and content.strip():
+            break
+        msgs.pop()
+    return assistant._call_llm(
+        messages=msgs,
+        functions=None,
+        stream=True,
+        extra_generate_cfg={"lang": "en"},
+    )
+
+
 async def run_turn(
     *,
     model: str,
@@ -231,10 +275,25 @@ async def run_turn(
 
     def drive() -> None:
         try:
+            last: list | None = None
             for item in assistant.run(messages, lang="en"):
                 if rt.cancel.is_set() or rt.aborted:
                     raise asyncio.CancelledError()
+                last = item
                 rt.put(q, ("yield", item))
+            if last is not None and not (rt.cancel.is_set() or rt.aborted) and _needs_final_answer(last):
+                # The turn ended with NO assistant answer (tool-call budget
+                # exhausted right after a tool result, or a thinking-only
+                # final call). Force one final tool-less answer from the
+                # same history. `last` is only the accumulated suffix
+                # (FnCallAgent never re-yields the input messages), so the
+                # fallback call must be re-anchored onto them.
+                for batch in final_answer_stream(assistant, messages + last):
+                    if rt.cancel.is_set() or rt.aborted:
+                        raise asyncio.CancelledError()
+                    if not batch:
+                        continue
+                    rt.put(q, ("yield", list(last) + list(batch)))
             rt.put(q, ("done", None))
         except asyncio.CancelledError:
             rt.aborted = True

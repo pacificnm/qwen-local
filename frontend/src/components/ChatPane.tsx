@@ -112,18 +112,28 @@ function PrLinks({ calls }: { calls: ToolCallInfo[] }) {
 }
 
 function AssistantBody({ msg }: { msg: ChatMessage }) {
+  const body = (msg.content ?? "").trim();
+  const hasTools = msg.tool_calls && msg.tool_calls.length > 0;
   return (
     <div className="md-body">
-      {msg.tool_calls && msg.tool_calls.length > 0 && (
+      {hasTools && (
         <>
-          <ToolChips calls={msg.tool_calls} />
-          <ToolOutput calls={msg.tool_calls} />
-          <PrLinks calls={msg.tool_calls} />
+          <ToolChips calls={msg.tool_calls!} />
+          <ToolOutput calls={msg.tool_calls!} />
+          <PrLinks calls={msg.tool_calls!} />
         </>
       )}
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {msg.content || ""}
-      </ReactMarkdown>
+      {body ? (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          {msg.content}
+        </ReactMarkdown>
+      ) : (
+        <p className="dim">
+          {hasTools
+            ? "Run finished with tool calls only — no final answer was generated. Ask a follow-up to continue."
+            : "No response"}
+        </p>
+      )}
     </div>
   );
 }

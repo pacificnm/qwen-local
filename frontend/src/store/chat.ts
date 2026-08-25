@@ -263,8 +263,16 @@ export const useChat = create<ChatState>()((set, get) => ({
       // persisted text + tool_calls match the DB, and the title may have changed.
       const detail = await api.getConversation(convId);
       const fresh = get();
+      let msgs = detail.messages;
+      const lastMsg = msgs[msgs.length - 1];
+      if (fresh.assistantText && lastMsg && lastMsg.role === "assistant" && !(lastMsg.content ?? "").trim()) {
+        // The answer only ever existed as streamed tokens (e.g. the model's
+        // tool-call budget ended before any final answer was persisted):
+        // keep what the user actually saw instead of rendering an empty bubble.
+        msgs = [...msgs.slice(0, -1), { ...lastMsg, content: fresh.assistantText }];
+      }
       set({
-        messages: detail.messages,
+        messages: msgs,
         conversations: fresh.conversations.map((c) =>
           c.id === convId ? { ...c, title: detail.conversation.title, updated_at: detail.conversation.updated_at } : c,
         ),
