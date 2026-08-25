@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ChatMessage, ToolCallInfo } from "../lib/api";
+import { EFFORT_LEVELS, type ChatMessage, type Effort, type ToolCallInfo } from "../lib/api";
 import { useChat } from "../store/chat";
 import { useEditor } from "../store/editor";
 import { useModels } from "../store/models";
@@ -149,6 +149,8 @@ export default function ChatPane() {
     send,
     cancel,
     clearError,
+    effort,
+    setEffort,
   } = useChat();
   const { models, selectedId, loaded, select } = useModels();
   const { repos } = useRepos();
@@ -291,30 +293,57 @@ export default function ChatPane() {
       </div>
 
       <div className="composer">
-        <textarea
-          rows={3}
-          placeholder="Ask about your codebase… (Enter to send, Shift+Enter for newline)"
-          value={draft}
-          disabled={busy}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void doSend();
-            }
-          }}
-          aria-label="Message"
-        />
-        <div className="composer-actions">
-          {busy ? (
-            <button disabled={phase === "stopping"} onClick={doCancel}>
-              {phase === "stopping" ? "Stopping…" : "■ Stop"}
-            </button>
-          ) : (
-            <button className="primary" disabled={!draft.trim()} onClick={() => void doSend()}>
-              Send
-            </button>
-          )}
+        <div className="composer-box">
+          <textarea
+            rows={3}
+            placeholder="Ask about your codebase… (Enter to send, Shift+Enter for newline)"
+            value={draft}
+            disabled={busy}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void doSend();
+              }
+            }}
+            aria-label="Message"
+          />
+          <div className="composer-bar">
+            <select
+              className="effort-picker"
+              value={effort}
+              onChange={(e) => setEffort(e.target.value as Effort)}
+              aria-label="Reasoning effort"
+              title="Reasoning effort — higher thinks longer (slower)"
+            >
+              {[...EFFORT_LEVELS].reverse().map((lvl) => (
+                <option key={lvl} value={lvl}>
+                  {lvl}
+                </option>
+              ))}
+            </select>
+            {busy ? (
+              <button
+                className="composer-send"
+                disabled={phase === "stopping"}
+                onClick={doCancel}
+                title={phase === "stopping" ? "Stopping…" : "Stop"}
+                aria-label="Stop"
+              >
+                {phase === "stopping" ? "…" : "■"}
+              </button>
+            ) : (
+              <button
+                className="composer-send primary"
+                disabled={!draft.trim()}
+                onClick={() => void doSend()}
+                title="Send (Enter)"
+                aria-label="Send"
+              >
+                ↑
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

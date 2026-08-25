@@ -307,10 +307,15 @@ export async function deleteConversation(id: string): Promise<void> {
   }
 }
 
+/** Reasoning-effort levels, matching the backend's `EFFORT_LEVELS`. */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+export type Effort = (typeof EFFORT_LEVELS)[number];
+
 export interface ChatStartPayload {
   conversation_id: string;
   message: string;
   model?: string;
+  effort?: Effort;
 }
 
 /** POST /chat/stream is SSE; EventSource can't POST, so we decode frames by hand. */

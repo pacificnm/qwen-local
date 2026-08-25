@@ -774,38 +774,70 @@ label {
   font-size: 0.8rem;
 }
 
-/* composer */
+/* composer — VS Code–style boxed input: textarea + in-box footer bar
+   (effort picker left, send/stop right) */
 
 .composer {
   border-top: 1px solid var(--border);
   background: var(--bg-panel);
   padding: 0.7rem 1rem 0.9rem;
+}
+
+.composer-box {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-}
-
-.composer textarea {
-  resize: none;
-  font: inherit;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.6rem 0.75rem;
-  outline: none;
+  border-radius: 12px;
+  transition: border-color 0.15s ease;
 }
 
-.composer textarea:focus {
+.composer-box:focus-within {
   border-color: var(--accent);
 }
 
-.composer-actions {
-  display: flex;
-  justify-content: flex-end;
+.composer-box textarea {
+  resize: none;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0.65rem 0.8rem 0.2rem;
+  outline: none;
 }
 
-.composer-actions button {
-  padding: 0.45rem 1rem;
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.55rem 0.5rem;
+}
+
+.effort-picker {
+  width: auto;
+  margin-top: 0;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.85rem;
+  border-radius: 7px;
+  color: var(--text-dim);
+}
+
+.effort-picker:focus {
+  color: var(--text);
+}
+
+.composer-send {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1rem;
+  line-height: 1;
 }
 
 /* --- Phase 4: code blocks in chat --- */

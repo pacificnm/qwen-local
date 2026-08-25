@@ -44,6 +44,27 @@ DEFAULT_MAX_TOKENS = 8192
 DEFAULT_MAX_INPUT_TOKENS = 24000
 DEFAULT_REQUEST_TIMEOUT = 300
 
+#: Reasoning-effort levels (UI selector) → per-request parameters sent at the
+#: TOP LEVEL of the OpenAI-compatible chat-completions body. `reasoning_effort`
+#: is the effective knob on these Qwen3.x builds (verified against Ollama);
+#: `think` / `max_thinking_tokens` are accepted by the endpoint and kept for
+#: portability to other deployments. They must be delivered via the openai
+#: SDK's `extra_body` channel — `chat.completions.create()` rejects unknown
+#: bare kwargs — and since Qwen-Agent forwards generate_cfg keys as kwargs,
+#: `extra_body` inside generate_cfg is the one path that reaches the body.
+EFFORT_LEVELS: dict[str, dict] = {
+    "low": {"think": False, "reasoning_effort": "low", "max_thinking_tokens": 0},
+    "medium": {"think": True, "reasoning_effort": "low", "max_thinking_tokens": 2048},
+    "high": {"think": True, "reasoning_effort": "medium", "max_thinking_tokens": 8192},
+    "xhigh": {"think": True, "reasoning_effort": "high", "max_thinking_tokens": 16384},
+}
+DEFAULT_EFFORT = "medium"
+
+
+def effort_body(effort: str | None) -> dict:
+    """The request-body parameters for a (possibly unknown) effort label."""
+    return EFFORT_LEVELS.get(effort or DEFAULT_EFFORT, EFFORT_LEVELS[DEFAULT_EFFORT])
+
 
 def _copy_reasoning(obj: object) -> None:
     """Ollama emits thinking in the extra `reasoning` field of a chunk's
@@ -106,7 +127,7 @@ class OllamaTextChat(TextChatAtOAI):
         return wrapped
 
 
-def build_llm(model: str) -> OllamaTextChat:
+def build_llm(model: str, effort: str | None = DEFAULT_EFFORT) -> OllamaTextChat:
     """Qwen-Agent LLM instance pointing the OpenAI-compatible client at Ollama.
 
     `use_raw_api=True` is REQUIRED here: Qwen-Agent's default (non-raw)
@@ -116,6 +137,12 @@ def build_llm(model: str) -> OllamaTextChat:
     `tool_calls` (streaming: `delta.reasoning` + `delta.tool_calls`).
     All generate parameters must live under the `generate_cfg` sub-dict —
     `BaseChatModel` reads that dict; top-level keys are silently ignored.
+
+    `effort` (a UI label from `EFFORT_LEVELS`) selects the per-request
+    thinking parameters, sent under `extra_body` so they reach the top level
+    of the JSON body (unknown bare kwargs would be rejected by the
+    openai SDK). Every call made by this instance — the FnCall loop and the
+    final-answer fallback — carries it.
     """
     s = get_settings()
     host = s.effective_ollama_host.rstrip("/")
@@ -131,13 +158,14 @@ def build_llm(model: str) -> OllamaTextChat:
                 "request_timeout": DEFAULT_REQUEST_TIMEOUT,
                 "max_retries": 2,
                 "use_raw_api": True,
+                "extra_body": effort_body(effort),
             },
         }
     )
 
 
-def build_assistant(model: str, tools: list) -> Assistant:
-    return Assistant(function_list=tools, llm=build_llm(model), name="qwen-assist", files=None)
+def build_assistant(model: str, tools: list, effort: str | None = DEFAULT_EFFORT) -> Assistant:
+    return Assistant(function_list=tools, llm=build_llm(model, effort), name="qwen-assist", files=None)
 
 
 def _attr(msg: object, key: str) -> object:
@@ -259,16 +287,19 @@ async def run_turn(
     emit,
     cancel: asyncio.Event,
     assistant: Assistant | None = None,
+    effort: str | None = DEFAULT_EFFORT,
 ) -> str:
     """Run one user turn via Qwen-Agent; emits the SSE events live.
 
     Returns "done" | "cancelled" | "error". `assistant` is a test seam
-    (defaults to a real Assistant built for `model`).
+    (defaults to a real Assistant built for `model`). `effort` selects the
+    per-request thinking parameters (see `EFFORT_LEVELS`) for the built
+    assistant; a caller-supplied `assistant` owns its own LLM and ignores it.
     """
     loop = asyncio.get_running_loop()
     rt = TurnRuntime(emit=emit, cancel=cancel, loop=loop)
     if assistant is None:
-        assistant = build_assistant(model, build_tools(rt, repo))
+        assistant = build_assistant(model, build_tools(rt, repo), effort)
 
     messages: list[dict] = [{"role": "system", "content": system}, *history]
     q: asyncio.Queue = asyncio.Queue()

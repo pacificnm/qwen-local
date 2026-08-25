@@ -26,6 +26,8 @@ interface ChatState {
   thinkingText: string;
   toolCalls: api.ToolCallInfo[];
   error: string | null;
+  /** Reasoning effort (low|medium|high|xhigh), persisted across reloads. */
+  effort: api.Effort;
 
   loadConversations: () => Promise<void>;
   loadMore: () => Promise<void>;
@@ -37,6 +39,7 @@ interface ChatState {
   rename: (id: string, title: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
   send: (text: string, model: string, abort: AbortController) => Promise<void>;
+  setEffort: (e: api.Effort) => void;
   cancel: () => Promise<void>;
   clearError: () => void;
   /** Append a persisted note (e.g. a recorded PR link) to the active conversation. */
@@ -44,6 +47,20 @@ interface ChatState {
 }
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+const EFFORT_KEY = "qc.effort";
+
+function loadEffort(): api.Effort {
+  try {
+    const stored = localStorage.getItem(EFFORT_KEY);
+    if (stored && (api.EFFORT_LEVELS as readonly string[]).includes(stored)) {
+      return stored as api.Effort;
+    }
+  } catch {
+    /* SSR / blocked storage — fall back to the default */
+  }
+  return "medium";
+}
 
 export const useChat = create<ChatState>()((set, get) => ({
   conversations: [],
@@ -59,6 +76,7 @@ export const useChat = create<ChatState>()((set, get) => ({
   thinkingText: "",
   toolCalls: [],
   error: null,
+  effort: loadEffort(),
 
   async loadConversations() {
     const page = await api.listConversations();
@@ -190,7 +208,7 @@ export const useChat = create<ChatState>()((set, get) => ({
 
     try {
       await api.streamChat(
-        { conversation_id: convId, message: text, model: modelId },
+        { conversation_id: convId, message: text, model: modelId, effort: get().effort },
         (event, data) => {
           const cur = get();
           switch (event) {
@@ -307,6 +325,15 @@ export const useChat = create<ChatState>()((set, get) => ({
 
   clearError() {
     set({ error: null, phase: get().phase === "error" ? "idle" : get().phase });
+  },
+
+  setEffort(e) {
+    set({ effort: e });
+    try {
+      localStorage.setItem(EFFORT_KEY, e);
+    } catch {
+      /* blocked storage — the value still applies for this session */
+    }
   },
 
   appendMessage(convId, message) {

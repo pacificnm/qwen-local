@@ -41,6 +41,7 @@ class ChatIn(BaseModel):
     conversation_id: uuid.UUID
     message: str = Field(min_length=1, max_length=64 * 1024)
     model: str | None = None  # absent → conversation default → strong model
+    effort: str | None = None  # absent → DEFAULT_EFFORT; xhigh|high|medium|low
 
 
 class CancelIn(BaseModel):
@@ -94,6 +95,13 @@ async def chat_stream(
     model = body.model or conv.model_default or get_settings().ollama_strong_model
     if model not in _known_models():
         raise HTTPException(status_code=422, detail="unknown model")
+
+    effort = body.effort or qwen_assistant.DEFAULT_EFFORT
+    if effort not in qwen_assistant.EFFORT_LEVELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown effort: {effort!r} (expected low|medium|high|xhigh)",
+        )
 
     # Persist the user message BEFORE the stream opens (spec: always kept).
     next_seq = (
@@ -152,6 +160,7 @@ async def chat_stream(
         _stream(
             conv_id=conv.id,
             model=model,
+            effort=effort,
             system=system,
             chat_history=chat_history,
             repo=repo_obj,
@@ -169,6 +178,7 @@ async def _stream(
     *,
     conv_id: uuid.UUID,
     model: str,
+    effort: str,
     system: str,
     chat_history: list[dict],
     repo: Repository | None,
@@ -205,6 +215,7 @@ async def _stream(
                 repo=repo,
                 emit=emit,
                 cancel=run.cancel,
+                effort=effort,
             )
         finally:
             q.put_nowait(sentinel)
@@ -218,6 +229,7 @@ async def _stream(
                     "request_id": run.request_id,
                     "conversation_id": str(conv_id),
                     "model": model,
+                    "effort": effort,
                 }
             ),
         }

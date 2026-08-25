@@ -506,6 +506,88 @@ async def test_build_assistant_wires_raw_llm_and_tools(monkeypatch):
     assert set(assistant.function_map) == {"web_search", "code_interpreter"}
 
 
+# --- effort levels (UI selector → request-body params) ----------------------
+
+
+def test_effort_levels_shape_and_default():
+    # Exactly the four UI levels, in the canonical order.
+    assert set(qa.EFFORT_LEVELS) == {"low", "medium", "high", "xhigh"}
+    assert qa.DEFAULT_EFFORT == "medium"
+    # Every body carries the three per-request knobs.
+    for body in qa.EFFORT_LEVELS.values():
+        assert set(body) == {"think", "reasoning_effort", "max_thinking_tokens"}
+        assert body["reasoning_effort"] in ("low", "medium", "high")
+    # The user's exact mapping.
+    expected = {
+        "low": (False, "low", 0),
+        "medium": (True, "low", 2048),
+        "high": (True, "medium", 8192),
+        "xhigh": (True, "high", 16384),
+    }
+    for level, (think, reasoning_effort, max_thinking_tokens) in expected.items():
+        assert qa.EFFORT_LEVELS[level] == {
+            "think": think,
+            "reasoning_effort": reasoning_effort,
+            "max_thinking_tokens": max_thinking_tokens,
+        }
+    # Higher levels think harder.
+    assert qa.EFFORT_LEVELS["low"]["max_thinking_tokens"] < qa.EFFORT_LEVELS["medium"]["max_thinking_tokens"]
+    assert qa.EFFORT_LEVELS["xhigh"]["reasoning_effort"] == "high"
+
+
+def test_effort_body_falls_back_to_default():
+    assert qa.effort_body(None) == qa.EFFORT_LEVELS[qa.DEFAULT_EFFORT]
+    assert qa.effort_body("") == qa.EFFORT_LEVELS[qa.DEFAULT_EFFORT]
+    assert qa.effort_body("bogus") == qa.EFFORT_LEVELS[qa.DEFAULT_EFFORT]
+    assert qa.effort_body("xhigh") == qa.EFFORT_LEVELS["xhigh"]
+
+
+def test_build_llm_embeds_effort_extra_body(monkeypatch):
+    monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
+    for level in qa.EFFORT_LEVELS:
+        llm = qa.build_llm("fake-model", level)
+        assert llm.generate_cfg["extra_body"] == qa.EFFORT_LEVELS[level]
+    # Absent → DEFAULT_EFFORT.
+    assert qa.build_llm("fake-model").generate_cfg["extra_body"] == qa.EFFORT_LEVELS[qa.DEFAULT_EFFORT]
+    # Unknown label → DEFAULT_EFFORT (never KeyError).
+    bogus = qa.build_llm("fake-model", "nonsense")
+    assert bogus.generate_cfg["extra_body"] == qa.EFFORT_LEVELS[qa.DEFAULT_EFFORT]
+
+
+def test_build_assistant_threads_effort(monkeypatch):
+    monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
+    assistant = qa.build_assistant("fake-model", [], "xhigh")
+    assert type(assistant.llm) is qa.OllamaTextChat
+    assert assistant.llm.generate_cfg["extra_body"] == qa.EFFORT_LEVELS["xhigh"]
+
+
+async def test_run_turn_threads_effort_to_built_assistant(monkeypatch):
+    """`run_turn(effort=…)` must reach the Assistant it builds.
+
+    (A caller-supplied `assistant` seam owns its own LLM and ignores
+    `effort` — the endpoint always builds fresh, so the default path is
+    what gets exercised here.)"""
+    captured: list = []
+
+    class _CapAssistant:
+        def run(self, messages, **kwargs):
+            yield [{"role": "assistant", "content": "ok"}]
+
+    def fake_build_assistant(model, tools, effort=None):
+        captured.append(effort)
+        return _CapAssistant()
+
+    monkeypatch.setattr(qa, "build_assistant", fake_build_assistant)
+
+    status, _ = await _collect({"effort": "xhigh"})
+    assert status == "done"
+    assert captured == ["xhigh"]
+
+    captured.clear()
+    await _collect({})
+    assert captured == [qa.DEFAULT_EFFORT]  # absent → medium
+
+
 def _make_ollama_chunk(delta: dict, finish: str | None = None):
     from openai.types.chat import ChatCompletionChunk
 
@@ -624,3 +706,52 @@ def test_raw_chat_shim_surfaces_reasoning_and_tool_calls(monkeypatch):
     assert calls[0]["function_call"]["name"] == "repo_write_file"
     assert "notes/a.md" in calls[0]["function_call"]["arguments"]
     assert calls[0]["extra"]["function_id"] == "call_1"
+
+
+def test_effort_extra_body_reaches_endpoint(monkeypatch):
+    """The effort knobs must survive the REAL production path —
+    `build_llm` → `raw_chat` → `_chat_stream` → the openai SDK `create` call —
+    as a top-level request param. `extra_body` is the only channel by which
+    a param the OpenAI SDK doesn't know about can reach Ollama's body (a bare
+    kwarg would be rejected); this asserts it arrives un-mangled for xhigh."""
+    import qwen_agent.llm.oai as oai_mod
+    from qwen_agent.llm.schema import USER, Message
+
+    seen: dict = {}
+    chunks = [
+        _make_ollama_chunk({"content": "ok", "reasoning": "hmm"}, finish="stop"),
+    ]
+
+    class _FakeCompletions:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return iter(chunks)
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeOpenAI:
+        def __init__(self, **init_kwargs):
+            seen.setdefault("client_init", {}).update(init_kwargs)
+            self.chat = _FakeChat()
+
+    monkeypatch.setattr(oai_mod.openai, "OpenAI", _FakeOpenAI)
+    monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
+
+    llm = qa.build_llm("fake-model", "xhigh")
+    # Drive with the model's OWN generate_cfg (the production path), not an
+    # ad-hoc dict — that's where `extra_body` lives.
+    _ = list(
+        llm.raw_chat(
+            messages=[Message(role=USER, content="hi")],
+            stream=True,
+            generate_cfg=llm.generate_cfg,
+        )
+    )
+
+    assert seen["extra_body"] == qa.EFFORT_LEVELS["xhigh"]
+    assert seen["extra_body"] == {
+        "think": True,
+        "reasoning_effort": "high",
+        "max_thinking_tokens": 16384,
+    }
