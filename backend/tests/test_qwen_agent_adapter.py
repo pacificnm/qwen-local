@@ -542,23 +542,28 @@ def test_effort_body_falls_back_to_default():
     assert qa.effort_body("xhigh") == qa.EFFORT_LEVELS["xhigh"]
 
 
+def _assert_extra_body(eb: dict, level: str) -> None:
+    for key, value in qa.EFFORT_LEVELS[level].items():
+        assert eb[key] == value
+    # Usage block for the context-used UI, requested alongside the effort knobs.
+    assert eb["stream_options"] == {"include_usage": True}
+
+
 def test_build_llm_embeds_effort_extra_body(monkeypatch):
     monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
     for level in qa.EFFORT_LEVELS:
-        llm = qa.build_llm("fake-model", level)
-        assert llm.generate_cfg["extra_body"] == qa.EFFORT_LEVELS[level]
+        _assert_extra_body(qa.build_llm("fake-model", level).generate_cfg["extra_body"], level)
     # Absent → DEFAULT_EFFORT.
-    assert qa.build_llm("fake-model").generate_cfg["extra_body"] == qa.EFFORT_LEVELS[qa.DEFAULT_EFFORT]
+    _assert_extra_body(qa.build_llm("fake-model").generate_cfg["extra_body"], qa.DEFAULT_EFFORT)
     # Unknown label → DEFAULT_EFFORT (never KeyError).
-    bogus = qa.build_llm("fake-model", "nonsense")
-    assert bogus.generate_cfg["extra_body"] == qa.EFFORT_LEVELS[qa.DEFAULT_EFFORT]
+    _assert_extra_body(qa.build_llm("fake-model", "nonsense").generate_cfg["extra_body"], qa.DEFAULT_EFFORT)
 
 
 def test_build_assistant_threads_effort(monkeypatch):
     monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
     assistant = qa.build_assistant("fake-model", [], "xhigh")
     assert type(assistant.llm) is qa.OllamaTextChat
-    assert assistant.llm.generate_cfg["extra_body"] == qa.EFFORT_LEVELS["xhigh"]
+    _assert_extra_body(assistant.llm.generate_cfg["extra_body"], "xhigh")
 
 
 async def test_run_turn_threads_effort_to_built_assistant(monkeypatch):
@@ -749,9 +754,122 @@ def test_effort_extra_body_reaches_endpoint(monkeypatch):
         )
     )
 
-    assert seen["extra_body"] == qa.EFFORT_LEVELS["xhigh"]
-    assert seen["extra_body"] == {
-        "think": True,
-        "reasoning_effort": "high",
-        "max_thinking_tokens": 16384,
+    _assert_extra_body(seen["extra_body"], "xhigh")
+
+
+def _usage_chunk(usage: dict):
+    """The stream's final chunk: empty `choices`, a `usage` block — exactly
+    what Ollama appends for `stream_options.include_usage`."""
+    from openai.types.chat import ChatCompletionChunk
+
+    payload = {
+        "id": "x",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "m",
+        "choices": [],
     }
+    if usage is not None:
+        payload["usage"] = usage
+    return ChatCompletionChunk.model_validate(payload)
+
+
+def test_stream_usage_captured_into_last_usage(monkeypatch):
+    """`OllamaTextChat` latches the usage block of the stream's final chunk
+    into `last_usage` — the `prompt_tokens` figure behind the UI's context-
+    used display. Chunks without usage (the ones carrying content) must not
+    clobber a captured value; a stream with no usage block leaves it None."""
+    import qwen_agent.llm.oai as oai_mod
+    from qwen_agent.llm.schema import USER, Message
+
+    def build(chunks: list):
+        class _FakeCompletions:
+            def create(self, **kwargs):
+                return iter(chunks)
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        class _FakeOpenAI:
+            def __init__(self, **init_kwargs):
+                self.chat = _FakeChat()
+
+        monkeypatch.setattr(oai_mod.openai, "OpenAI", _FakeOpenAI)
+        llm = qa.build_llm("fake-model")
+        messages = [Message(role=USER, content="hi")]
+        _ = list(llm.raw_chat(messages=messages, stream=True, generate_cfg=llm.generate_cfg))
+        return llm
+
+    # Content chunks, then the usage-bearing final chunk (live Ollama shape).
+    llm = build([
+        _make_ollama_chunk({"content": "ok"}),
+        _usage_chunk({"prompt_tokens": 12, "completion_tokens": 16, "total_tokens": 28}),
+    ])
+    assert llm.last_usage == {"prompt_tokens": 12, "completion_tokens": 16, "total_tokens": 28}
+
+    # No usage block anywhere → last_usage stays unset.
+    llm = build([_make_ollama_chunk({"content": "ok"}, finish="stop")])
+    assert llm.last_usage is None
+
+    # A usage-less chunk AFTER a captured one must not erase it (Ollama only
+    # sends the block once, in the final chunk).
+    llm = build([
+        _usage_chunk({"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}),
+        _make_ollama_chunk({"content": "late"}),
+    ])
+    assert llm.last_usage == {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}
+
+
+def test_assistant_usage_reads_llm_last_usage():
+    import types
+
+    class _NoLlm:
+        pass
+
+    assert qa._assistant_usage(_NoLlm()) is None
+    assert qa._assistant_usage(types.SimpleNamespace(llm=types.SimpleNamespace(last_usage=None))) is None
+    good = {"prompt_tokens": 42, "completion_tokens": 7, "total_tokens": 49}
+    fake = types.SimpleNamespace(llm=types.SimpleNamespace(last_usage=good))
+    assert qa._assistant_usage(fake) == good
+    # A non-dict last_usage is treated as missing, not trusted.
+    bad = types.SimpleNamespace(llm=types.SimpleNamespace(last_usage="nope"))
+    assert qa._assistant_usage(bad) is None
+
+
+async def test_done_event_carries_usage():
+    """`done` carries `usage` when the LLM captured one (the frontend's
+    `contextUsed` source); without a capture the event stays `{"text": …}`."""
+    import types
+
+    class _UsageAssistant:
+        llm = types.SimpleNamespace(
+            last_usage={"prompt_tokens": 42, "completion_tokens": 7, "total_tokens": 49}
+        )
+
+        def run(self, messages, **kwargs):
+            yield [{"role": "assistant", "content": "ok"}]
+
+    status, events = await _collect({"assistant": _UsageAssistant()})
+    assert status == "done"
+    done = [d for n, d in events if n == "done"]
+    assert done and done[0]["usage"] == {
+        "prompt_tokens": 42,
+        "completion_tokens": 7,
+        "total_tokens": 49,
+    }
+    assert done[0]["text"] == "ok"
+
+    # FakeAssistant has no `llm` attr → `_assistant_usage` → None.
+    plain = FakeAssistant(yields=[[{"role": "assistant", "content": "ok"}]])
+    status, events = await _collect({"assistant": plain})
+    assert status == "done"
+    done = [d for n, d in events if n == "done"]
+    assert done and "usage" not in done[0]
+
+
+def test_parse_num_ctx():
+    from app.api.models_api import _parse_num_ctx
+
+    assert _parse_num_ctx("num_ctx 128000\nnum_predict 8192\nnum_gpu 0") == 128000
+    assert _parse_num_ctx("mirror 1\nstop ") is None
+    assert _parse_num_ctx("") is None

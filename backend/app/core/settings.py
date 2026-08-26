@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # --- Ollama (pre-existing; the app only consumes this endpoint) ---
     ollama_host: str = "http://localhost:11434"
-    ollama_fast_model: str = "qwen3.5:4b"
+    ollama_fast_model: str = "qwen3.5:4b-compress"
     ollama_strong_model: str = "qwen3.8:27b-longctx"
     ollama_embed_model: str = "nomic-embed-text"
     ollama_keep_alive: str = "60s"
