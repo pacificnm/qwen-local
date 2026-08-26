@@ -9,7 +9,9 @@ consumed by `app/api/chat.py` and the frontend:
     thinking  {"text": <delta>}   (reasoning_content, reasoning models)
     token     {"text": <delta>}
     tool_*    (emitted by the tools; monotonic per-turn index)
-    done | cancelled | error      (exactly one terminal event)
+    done | cancelled | error      (exactly one terminal event; `done` also
+                                   carries `usage` — the last LLM call's
+                                   prompt/completion/total tokens)
 
 Cancellation: the user-Stop `asyncio.Event` is observed (a) by the driver
 between yields and (b) inside every awaited tool call, which cancels the
@@ -88,10 +90,13 @@ def _copy_reasoning(obj: object) -> None:
 
 class _ReasoningStream:
     """Iterator wrapper that copies `reasoning` → `reasoning_content` on
-    every chunk as it arrives (raw streaming path)."""
+    every chunk as it arrives (raw streaming path) and harvests the usage
+    block Ollama sends in the stream's final chunk (`usage.prompt_tokens`
+    drives the UI's context-used display)."""
 
-    def __init__(self, inner):
+    def __init__(self, inner, llm: "OllamaTextChat"):
         self._inner = inner
+        self._llm = llm
 
     def __iter__(self):
         return self
@@ -99,12 +104,14 @@ class _ReasoningStream:
     def __next__(self):
         chunk = next(self._inner)
         _copy_reasoning(chunk)
+        self._llm._capture_usage(chunk)
         return chunk
 
 
 class OllamaTextChat(TextChatAtOAI):
     """`TextChatAtOAI` with Ollama's `reasoning` field surfaced as
-    `reasoning_content`, the key Qwen-Agent's adapter reads.
+    `reasoning_content`, the key Qwen-Agent's adapter reads, and the stream's
+    usage block captured into `last_usage`.
 
     The wrapper wraps the `openai.OpenAI(...).chat.completions.create`
     closure assigned in `TextChatAtOAI.__init__`, so both the streaming
@@ -112,19 +119,38 @@ class OllamaTextChat(TextChatAtOAI):
 
     def __init__(self, cfg: dict | None = None):
         super().__init__(cfg)
+        self.last_usage: dict | None = None
         inner = self._chat_complete_create
         self._chat_complete_create = self._with_reasoning_shim(inner)
 
-    @staticmethod
-    def _with_reasoning_shim(inner):
+    def _with_reasoning_shim(self, inner):
         def wrapped(*args, **kwargs):
             response = inner(*args, **kwargs)
             if kwargs.get("stream"):
-                return _ReasoningStream(response)
+                return _ReasoningStream(response, self)
             _copy_reasoning(response)
+            self._capture_usage(response)
             return response
 
         return wrapped
+
+    def _capture_usage(self, response: object) -> None:
+        """Keep the last usage block with usable `prompt_tokens` (the final
+        chunk of a `stream_options.include_usage` stream, or a full
+        non-stream response)."""
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        entry: dict = {}
+        for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            try:
+                value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+            except Exception:
+                value = None
+            if isinstance(value, int):
+                entry[name] = value
+        if "prompt_tokens" in entry:
+            self.last_usage = entry
 
 
 def build_llm(model: str, effort: str | None = DEFAULT_EFFORT) -> OllamaTextChat:
@@ -143,6 +169,10 @@ def build_llm(model: str, effort: str | None = DEFAULT_EFFORT) -> OllamaTextChat
     of the JSON body (unknown bare kwargs would be rejected by the
     openai SDK). Every call made by this instance — the FnCall loop and the
     final-answer fallback — carries it.
+
+    `stream_options.include_usage` asks Ollama for the usage block in the
+    stream's final chunk; `OllamaTextChat` captures it into `last_usage`
+    (the `prompt_tokens` figure behind the UI's "% of context used").
     """
     s = get_settings()
     host = s.effective_ollama_host.rstrip("/")
@@ -158,7 +188,10 @@ def build_llm(model: str, effort: str | None = DEFAULT_EFFORT) -> OllamaTextChat
                 "request_timeout": DEFAULT_REQUEST_TIMEOUT,
                 "max_retries": 2,
                 "use_raw_api": True,
-                "extra_body": effort_body(effort),
+                "extra_body": {
+                    "stream_options": {"include_usage": True},
+                    **effort_body(effort),
+                },
             },
         }
     )
@@ -278,6 +311,17 @@ def final_answer_stream(assistant, conversation: list) -> Iterator[list]:
     )
 
 
+def _assistant_usage(assistant) -> dict | None:
+    """The turn's captured LLM usage — the LAST call's prompt tokens are the
+    truest "context used" figure (system + history + RAG + tool results).
+    None when the endpoint sent no usage block."""
+    llm = getattr(assistant, "llm", None)
+    if llm is None:
+        return None
+    usage = getattr(llm, "last_usage", None)
+    return usage if isinstance(usage, dict) else None
+
+
 async def run_turn(
     *,
     model: str,
@@ -371,7 +415,11 @@ async def run_turn(
             pass
 
     if status == "done":
-        await emit("done", {"text": full_text})
+        payload: dict = {"text": full_text}
+        usage = _assistant_usage(assistant)
+        if usage:
+            payload["usage"] = usage
+        await emit("done", payload)
     elif status == "cancelled":
         await emit("cancelled", {"text": full_text})
     else:

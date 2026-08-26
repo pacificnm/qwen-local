@@ -28,6 +28,8 @@ interface ChatState {
   error: string | null;
   /** Reasoning effort (low|medium|high|xhigh), persisted across reloads. */
   effort: api.Effort;
+  /** Last turn's prompt tokens (how much of the model's context was used). */
+  contextUsed: number | null;
 
   loadConversations: () => Promise<void>;
   loadMore: () => Promise<void>;
@@ -77,6 +79,7 @@ export const useChat = create<ChatState>()((set, get) => ({
   toolCalls: [],
   error: null,
   effort: loadEffort(),
+  contextUsed: null,
 
   async loadConversations() {
     const page = await api.listConversations();
@@ -133,6 +136,7 @@ export const useChat = create<ChatState>()((set, get) => ({
       thinkingText: "",
       toolCalls: [],
       error: null,
+      contextUsed: null,
     });
   },
 
@@ -143,6 +147,7 @@ export const useChat = create<ChatState>()((set, get) => ({
       assistantText: "",
       thinkingText: "",
       toolCalls: [],
+      contextUsed: null,
     });
   },
 
@@ -159,6 +164,7 @@ export const useChat = create<ChatState>()((set, get) => ({
       thinkingText: "",
       toolCalls: [],
       error: null,
+      contextUsed: null,
     }));
     return conv.id;
   },
@@ -176,7 +182,14 @@ export const useChat = create<ChatState>()((set, get) => ({
     set((s) => ({
       conversations: s.conversations.filter((c) => c.id !== id),
       ...(wasActive
-        ? { activeId: null, messages: [], assistantText: "", thinkingText: "", toolCalls: [] }
+        ? {
+            activeId: null,
+            messages: [],
+            assistantText: "",
+            thinkingText: "",
+            toolCalls: [],
+            contextUsed: null,
+          }
         : {}),
     }));
   },
@@ -203,6 +216,7 @@ export const useChat = create<ChatState>()((set, get) => ({
       thinkingText: "",
       toolCalls: [],
       error: null,
+      contextUsed: null,
       messages: [...s.messages, optimistic],
     });
 
@@ -267,7 +281,13 @@ export const useChat = create<ChatState>()((set, get) => ({
             case "cancelled":
               set({ phase: "cancelled" });
               break;
-            case "done":
+            case "done": {
+              const usage = data.usage as { prompt_tokens?: number } | undefined;
+              if (usage && typeof usage.prompt_tokens === "number") {
+                set({ contextUsed: usage.prompt_tokens });
+              }
+              break;
+            }
             case "code_block":
               break;
             default:

@@ -138,6 +138,11 @@ function AssistantBody({ msg }: { msg: ChatMessage }) {
   );
 }
 
+/** 128000 → "128.0k" for the context-status figure. */
+function fmtK(n: number): string {
+  return `${(n / 1000).toFixed(1)}k`;
+}
+
 export default function ChatPane() {
   const {
     messages,
@@ -151,8 +156,10 @@ export default function ChatPane() {
     clearError,
     effort,
     setEffort,
+    contextUsed,
   } = useChat();
   const { models, selectedId, loaded, select } = useModels();
+  const contextWindow = models.find((m) => m.id === selectedId)?.context_window ?? null;
   const { repos } = useRepos();
   const conv = useChat((s) => s.conversations.find((c) => c.id === s.activeId)) ?? null;
 
@@ -309,19 +316,31 @@ export default function ChatPane() {
             aria-label="Message"
           />
           <div className="composer-bar">
-            <select
-              className="effort-picker"
-              value={effort}
-              onChange={(e) => setEffort(e.target.value as Effort)}
-              aria-label="Reasoning effort"
-              title="Reasoning effort — higher thinks longer (slower)"
-            >
-              {[...EFFORT_LEVELS].reverse().map((lvl) => (
-                <option key={lvl} value={lvl}>
-                  {lvl}
-                </option>
-              ))}
-            </select>
+            <div className="composer-bar-left">
+              <select
+                className="effort-picker"
+                value={effort}
+                onChange={(e) => setEffort(e.target.value as Effort)}
+                aria-label="Reasoning effort"
+                title="Reasoning effort — higher thinks longer (slower)"
+              >
+                {[...EFFORT_LEVELS].reverse().map((lvl) => (
+                  <option key={lvl} value={lvl}>
+                    {lvl}
+                  </option>
+                ))}
+              </select>
+              {contextWindow != null && (
+                <span
+                  className="ctx-status"
+                  title="Model context window and usage of the last turn"
+                >
+                  {`· ${fmtK(contextWindow)} Context`}
+                  {contextUsed != null &&
+                    ` ${Math.min(100, (contextUsed / contextWindow) * 100).toFixed(1)}% used`}
+                </span>
+              )}
+            </div>
             {busy ? (
               <button
                 className="composer-send"

@@ -10,6 +10,8 @@ export interface Model {
   id: string;
   label: string;
   is_default: boolean;
+  /** Runtime context window in tokens (Ollama `num_ctx`), when known. */
+  context_window?: number | null;
 }
 
 export interface AuthUser {

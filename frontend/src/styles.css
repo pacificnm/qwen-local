@@ -827,6 +827,20 @@ label {
   color: var(--text);
 }
 
+.composer-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.ctx-status {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .composer-send {
   width: 32px;
   height: 32px;
