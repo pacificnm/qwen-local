@@ -27,6 +27,7 @@ from dotenv import dotenv_values  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
+import app.db.models  # noqa: E402,F401  # register all tables with Base.metadata
 from app.core.security import hash_password  # noqa: E402
 from app.core.settings import Settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
@@ -81,6 +82,79 @@ async def main() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, checkfirst=True)
     print("✓ tables created/verified")
+
+    # 2b) Projects migration (idempotent, safe to re-run).
+    #  create_all builds `projects` on fresh installs; on an existing DB it is
+    #  a no-op, so the ALTER/INDEX/BACKFILL below carry the live upgrade.
+    #  Ownership: repositories.project_id (ONE repo per project — a plain
+    #  unique index enforces both directions in PG, NULLs allowed to repeat).
+    #  Conversations: project_id NOT NULL, FK ON DELETE CASCADE.
+    MIGRATE_PROJECTS = [
+        "ALTER TABLE repositories "
+        "ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE SET NULL",
+        "CREATE INDEX IF NOT EXISTS ix_repositories_project_id ON repositories(project_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_repositories_project_id ON repositories(project_id)",
+        "ALTER TABLE conversations "
+        "ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE",
+        "CREATE INDEX IF NOT EXISTS ix_conversations_project_id ON conversations(project_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_user_name ON projects(user_id, name)",
+        # General project per user (repo-less chat home) — name-based guard
+        # keeps re-runs from duplicating it.
+        "INSERT INTO projects (id, user_id, name, created_at, updated_at) "
+        "SELECT gen_random_uuid(), u.id, 'General', now(), now() "
+        "FROM users u "
+        "WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id AND p.name = 'General')",
+        # One project per existing repo (named after it) …
+        "INSERT INTO projects (id, user_id, name, created_at, updated_at) "
+        "SELECT gen_random_uuid(), (SELECT id FROM users ORDER BY created_at LIMIT 1), "
+        "r.github_full_name, now(), now() "
+        "FROM repositories r "
+        "WHERE r.project_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.name = r.github_full_name)",
+        "UPDATE repositories r SET project_id = p.id "
+        "FROM projects p WHERE p.name = r.github_full_name AND r.project_id IS NULL",
+        # Repo-less conversations → General.
+        "UPDATE conversations c SET project_id = p.id "
+        "FROM projects p WHERE p.user_id = c.user_id AND p.name = 'General' AND c.project_id IS NULL",
+    ]
+    for ddl in MIGRATE_PROJECTS:
+        async with engine.begin() as conn:
+            await conn.execute(text(ddl))
+    # … and point repo-bound conversations at their repo's project. Only
+    # possible while the legacy repo_id column still exists — it is dropped
+    # at the end of this block on the first run, so later re-runs skip it.
+    async with engine.begin() as conn:
+        has_legacy_repo_id = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'conversations' AND column_name = 'repo_id'"
+                )
+            )
+        ).scalar_one_or_none()
+        if has_legacy_repo_id:
+            await conn.execute(
+                text(
+                    "UPDATE conversations c SET project_id = r.project_id "
+                    "FROM repositories r WHERE r.id = c.repo_id "
+                    "AND r.project_id IS NOT NULL AND c.project_id IS NULL"
+                )
+            )
+    # Tighten to NOT NULL only once every conversation has a project.
+    async with engine.begin() as conn:
+        orphans = (
+            await conn.execute(text("SELECT count(*) FROM conversations WHERE project_id IS NULL"))
+        ).scalar_one()
+        if orphans == 0:
+            await conn.execute(
+                text("ALTER TABLE conversations ALTER COLUMN project_id SET NOT NULL")
+            )
+        else:
+            print(f"⚠ {orphans} conversation(s) still lack a project — leaving project_id nullable")
+    # The column is gone from the schema (and the model) — drop it.
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE conversations DROP COLUMN IF EXISTS repo_id"))
+    print("✓ projects migration applied (idempotent)")
 
     # 3) HNSW index on embeddings.
     async with engine.begin() as conn:

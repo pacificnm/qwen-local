@@ -4,7 +4,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.api import auth, chat, conversations, edits, health, models_api, repos
+from app.api import auth, chat, conversations, edits, health, models_api, projects, repos
 from app.db.session import dispose_engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -20,6 +20,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(models_api.router)
+    app.include_router(projects.router)
     app.include_router(repos.router)
     app.include_router(edits.router)
     app.include_router(conversations.router)
