@@ -205,6 +205,79 @@ export async function getRepoFile(repoId: string, path: string): Promise<{ path:
   return handle<{ path: string; content: string }>(res);
 }
 
+export async function renameRepoFile(
+  repoId: string,
+  fromPath: string,
+  toPath: string,
+): Promise<{ path: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/files/rename`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from_path: fromPath, to_path: toPath }),
+  });
+  return handle<{ path: string }>(res);
+}
+
+export async function deleteRepoFile(repoId: string, path: string): Promise<{ deleted: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/file`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  return handle<{ deleted: string }>(res);
+}
+
+export async function createRepoFile(
+  repoId: string,
+  path: string,
+  content: string,
+): Promise<{ path: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/files/create`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+  return handle<{ path: string }>(res);
+}
+
+export async function createRepoDir(repoId: string, path: string): Promise<{ path: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/folders`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  return handle<{ path: string }>(res);
+}
+
+export interface GitDirtyEntry {
+  status: string;
+  path: string;
+}
+
+export interface GitLogEntry {
+  sha: string;
+  author: string;
+  date: string;
+  subject: string;
+}
+
+export interface GitState {
+  repo_id: string;
+  branch: string;
+  head_sha: string;
+  dirty: GitDirtyEntry[];
+  recent: GitLogEntry[];
+}
+
+export async function getRepoGit(repoId: string): Promise<GitState> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git`, { credentials: "same-origin" });
+  return handle<GitState>(res);
+}
+
 export interface CommitBody {
   repo_id: string;
   file_path: string;

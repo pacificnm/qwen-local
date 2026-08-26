@@ -17,7 +17,7 @@ import httpx
 
 from app.core.settings import get_settings
 
-from .errors import FileNotFound, GitError, GithubApiError, InvalidBranch
+from .errors import FileExists, FileNotFound, GitError, GithubApiError, InvalidBranch
 
 FULL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
@@ -147,6 +147,36 @@ async def head_sha(repo_dir: Path) -> str:
     return (await _run(["git", "rev-parse", "HEAD"], pat="", cwd=str(repo_dir))).strip()
 
 
+async def repo_state(repo_dir: Path, full_name: str) -> dict:
+    """Read-only git snapshot for the Git tab (branch, dirty files, recent log).
+
+    Takes the same per-repo lock the write paths use so a commit cannot
+    land mid-snapshot. No PAT needed — everything is local.
+    """
+    async with _lock_for(full_name):
+        branch = (await _run(["git", "branch", "--show-current"], pat="", cwd=str(repo_dir))).strip()
+        sha = await head_sha(repo_dir)
+        status = await _run(["git", "status", "--porcelain"], pat="", cwd=str(repo_dir))
+        dirty: list[dict] = []
+        for line in status.splitlines():
+            if len(line) >= 4:
+                dirty.append({"status": line[:2].strip() or "??", "path": line[3:]})
+        sep = "\x00"
+        # %x00 is git's own NUL escape — a raw NUL in argv would corrupt the
+        # format string, and git would not emit the field separators.
+        log = await _run(
+            ["git", "log", "-10", "--date=short", "--pretty=format:%h%x00%an%x00%ad%x00%s"],
+            pat="",
+            cwd=str(repo_dir),
+        )
+        recent: list[dict] = []
+        for line in log.splitlines():
+            parts = line.split(sep)
+            if len(parts) == 4:
+                recent.append({"sha": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3]})
+        return {"branch": branch, "head_sha": sha, "dirty": dirty, "recent": recent}
+
+
 def remove_repo(workspace: Path, full_name: str) -> None:
     shutil.rmtree(workspace_repo_dir(workspace, full_name), ignore_errors=True)
 
@@ -176,7 +206,17 @@ def resolve_safe(repo_dir: Path, rel_path: str) -> Path:
 
 
 async def list_file_paths(repo_dir: Path) -> list[str]:
-    return [f.path for f in (await list_tree(repo_dir)) if (repo_dir / f.path).is_file()]
+    """Files in the worktree: index (tracked/staged) + untracked, .gitignore-respecting.
+
+    Context-menu creates and pastes are untracked until committed, so a
+    `git ls-tree HEAD`-only listing would hide new files/folders until commit.
+    """
+    cached = await _run(["git", "ls-files", "-z", "--cached"], pat="", cwd=str(repo_dir))
+    others = await _run(
+        ["git", "ls-files", "-z", "-o", "--exclude-standard"], pat="", cwd=str(repo_dir)
+    )
+    paths = {p for p in cached.split("\0") + others.split("\0") if p}
+    return sorted(p for p in paths if (repo_dir / p).is_file())
 
 
 def read_file(repo_dir: Path, rel_path: str) -> str:
@@ -184,6 +224,59 @@ def read_file(repo_dir: Path, rel_path: str) -> str:
     if not target.is_file():
         raise FileNotFound(f"file not found in repository: {rel_path}")
     return target.read_text(encoding="utf-8", errors="replace")
+
+
+def rename_entry(repo_dir: Path, from_rel: str, to_rel: str) -> None:
+    """Move a file or folder inside the worktree (context-menu Rename)."""
+    src = resolve_safe(repo_dir, from_rel)
+    dst = resolve_safe(repo_dir, to_rel)
+    if not src.exists():
+        raise FileNotFound(f"not found in repository: {from_rel}")
+    if dst.exists():
+        raise FileExists(f"destination already exists: {to_rel}")
+    if not dst.parent.is_dir():
+        raise GitError(f"destination folder does not exist: {to_rel.rsplit('/', 1)[0]}")
+    src.rename(dst)
+
+
+def delete_entry(repo_dir: Path, rel: str) -> None:
+    """Delete a file or folder inside the worktree (context-menu Delete)."""
+    target = resolve_safe(repo_dir, rel)
+    if target == repo_dir.resolve():
+        raise GitError("cannot delete the repository root")
+    if not target.exists():
+        raise FileNotFound(f"not found in repository: {rel}")
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+
+
+def create_file(repo_dir: Path, rel: str, content: str) -> None:
+    """Create a new file in the worktree (context-menu Paste)."""
+    target = resolve_safe(repo_dir, rel)
+    if target.exists():
+        raise FileExists(f"file already exists: {rel}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+
+
+def create_folder(repo_dir: Path, rel: str) -> None:
+    """Create a new folder in the worktree (context-menu "New Folder").
+
+    Git cannot represent an empty directory, so a `.gitkeep` placeholder is
+    planted — that keeps the folder alive across syncs and `git clean -fd`.
+    """
+    target = resolve_safe(repo_dir, rel)
+    if target == repo_dir.resolve():
+        raise GitError("cannot create a folder at the repository root")
+    if target.exists():
+        raise FileExists(f"folder already exists: {rel}")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:  # e.g. an intermediate path is a file
+        raise GitError(f"cannot create folder {rel}: {exc}") from exc
+    (target / ".gitkeep").write_text("", encoding="utf-8")
 
 
 @dataclass(frozen=True)

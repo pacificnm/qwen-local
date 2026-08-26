@@ -13,6 +13,10 @@ class FileNotFound(SyncError):
     """The requested file does not exist in the repository (→ 422)."""
 
 
+class FileExists(SyncError):
+    """The target path already exists in the repository (→ 409)."""
+
+
 class InvalidBranch(SyncError):
     """Branch name is not a valid git ref (→ 422)."""
 
