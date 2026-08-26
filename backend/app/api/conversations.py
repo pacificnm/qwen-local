@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.core.settings import get_settings
-from app.db.models import Conversation, Message, Repository, User
+from app.db.models import Conversation, Message, Project, Repository, User
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -24,7 +24,7 @@ TITLE_MAX = 255
 
 
 class CreateIn(BaseModel):
-    repo_id: uuid.UUID | None = None
+    project_id: uuid.UUID
     model_default: str | None = None
     title: str | None = Field(default=None, max_length=TITLE_MAX)
 
@@ -45,15 +45,31 @@ def _known_models() -> set[str]:
     return {s.ollama_fast_model, s.ollama_strong_model}
 
 
-def _conv_out(c: Conversation) -> dict:
+def _conv_out(c: Conversation, repo: Repository | None = None) -> dict:
     return {
         "id": str(c.id),
         "title": c.title,
-        "repo_id": str(c.repo_id) if c.repo_id else None,
+        "project_id": str(c.project_id),
+        # Repo of the conversation's project — powers the RAG chip + editor.
+        "repo_id": str(repo.id) if repo is not None else None,
+        "repo_name": repo.github_full_name if repo is not None else None,
         "model_default": c.model_default,
         "created_at": c.created_at,
         "updated_at": c.updated_at,
     }
+
+
+async def _repo_by_project(
+    db: AsyncSession, project_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, Repository]:
+    if not project_ids:
+        return {}
+    repos = (
+        (await db.execute(select(Repository).where(Repository.project_id.in_(project_ids))))
+        .scalars()
+        .all()
+    )
+    return {r.project_id: r for r in repos}
 
 
 def _msg_out(m: Message) -> dict:
@@ -101,11 +117,12 @@ async def create_conversation(
 ):
     if body.model_default is not None and body.model_default not in _known_models():
         raise HTTPException(status_code=422, detail="unknown model")
-    if body.repo_id is not None and await db.get(Repository, body.repo_id) is None:
-        raise HTTPException(status_code=404, detail="Repository not linked")
+    project = await db.get(Project, body.project_id)
+    if project is None or project.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Project not found")
     conv = Conversation(
         user_id=user.id,
-        repo_id=body.repo_id,
+        project_id=project.id,
         title=(body.title or "New chat").strip() or "New chat",
         model_default=body.model_default,
     )
@@ -116,14 +133,17 @@ async def create_conversation(
 
 @router.get("", response_model=dict)
 async def list_conversations(
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    project_id: uuid.UUID,
     limit: Annotated[int, Query(ge=1)] = DEFAULT_LIMIT,
     cursor: str | None = None,
     q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     limit = min(limit, MAX_LIMIT)
-    base = select(Conversation).where(Conversation.user_id == user.id)
+    base = select(Conversation).where(
+        Conversation.user_id == user.id, Conversation.project_id == project_id
+    )
 
     if q:
         tsq = func.plainto_tsquery("english", q)
@@ -160,7 +180,9 @@ async def list_conversations(
         .all()
     )
     has_more = len(convs) > limit
-    items = [_conv_out(c) for c in convs[:limit]]
+    page = convs[:limit]
+    repo_map = await _repo_by_project(db, {c.project_id for c in page})
+    items = [_conv_out(c, repo_map.get(c.project_id)) for c in page]
     return {
         "items": items,
         "next_cursor": _encode_cursor(items[-1]["updated_at"], uuid.UUID(items[-1]["id"]))
@@ -192,7 +214,10 @@ async def get_conversation(
         .scalars()
         .all()
     )
-    return {"conversation": _conv_out(conv), "messages": [_msg_out(m) for m in rows]}
+    repo = (
+        await db.execute(select(Repository).where(Repository.project_id == conv.project_id))
+    ).scalar_one_or_none()
+    return {"conversation": _conv_out(conv, repo), "messages": [_msg_out(m) for m in rows]}
 
 
 @router.patch("/{conv_id}")

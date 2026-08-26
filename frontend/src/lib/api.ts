@@ -106,6 +106,62 @@ export interface RepoSyncStatus {
   last_commit_sha: string | null;
 }
 
+/* --- projects (Phase 5: a project owns one repo + its conversations) --- */
+
+export interface Project {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  repo: Repo | null;
+  conversation_count: number;
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const res = await fetch(`${BASE}/projects`, { credentials: "same-origin" });
+  return handle<Project[]>(res);
+}
+
+export async function createProject(body: {
+  name?: string;
+  full_name?: string | null;
+}): Promise<Project> {
+  const res = await fetch(`${BASE}/projects`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handle<Project>(res);
+}
+
+export async function updateProject(
+  id: string,
+  body: { name?: string; full_name?: string | null; detach_repo?: boolean },
+): Promise<Project> {
+  const res = await fetch(`${BASE}/projects/${id}`, {
+    method: "PATCH",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handle<Project>(res);
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/projects/${id}`, { method: "DELETE", credentials: "same-origin" });
+  if (!res.ok && res.status !== 204) {
+    let detail: unknown = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      if (body && typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+}
+
 export async function listRepos(): Promise<Repo[]> {
   const res = await fetch(`${BASE}/repos`, { credentials: "same-origin" });
   return handle<Repo[]>(res);
@@ -209,6 +265,7 @@ export async function unlinkRepo(id: string): Promise<void> {
 export interface Conversation {
   id: string;
   title: string;
+  project_id: string;
   repo_id: string | null;
   repo_name?: string | null;
   model_default: string | null;
@@ -245,24 +302,24 @@ export interface ConversationDetail {
   messages: ChatMessage[];
 }
 
-export async function listConversations(opts?: {
+export async function listConversations(opts: {
+  project_id: string;
   q?: string;
   cursor?: string;
   limit?: number;
 }): Promise<ConversationListPage> {
-  const params = new URLSearchParams();
-  if (opts?.q) params.set("q", opts.q);
-  if (opts?.cursor) params.set("cursor", opts.cursor);
-  if (opts?.limit) params.set("limit", String(opts.limit));
-  const qs = params.toString();
-  const res = await fetch(`${BASE}/conversations${qs ? `?${qs}` : ""}`, {
+  const params = new URLSearchParams({ project_id: opts.project_id });
+  if (opts.q) params.set("q", opts.q);
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const res = await fetch(`${BASE}/conversations?${params.toString()}`, {
     credentials: "same-origin",
   });
   return handle<ConversationListPage>(res);
 }
 
 export async function createConversation(body: {
-  repo_id?: string | null;
+  project_id: string;
   model_default?: string | null;
   title?: string;
 }): Promise<Conversation> {

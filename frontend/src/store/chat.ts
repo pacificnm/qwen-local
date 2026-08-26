@@ -17,8 +17,8 @@ interface ChatState {
   nextCursor: string | null;
   search: string;
   activeId: string | null;
-  /** Repo a new conversation should bind to (null = general chat, no RAG). */
-  newChatRepoId: string | null;
+  /** Project whose conversations are listed (set by loadConversations). */
+  scopeId: string | null;
   messages: api.ChatMessage[];
   phase: StreamPhase;
   requestId: string | null;
@@ -31,13 +31,12 @@ interface ChatState {
   /** Last turn's prompt tokens (how much of the model's context was used). */
   contextUsed: number | null;
 
-  loadConversations: () => Promise<void>;
+  loadConversations: (projectId: string) => Promise<void>;
   loadMore: () => Promise<void>;
   setSearch: (q: string) => void;
-  setNewChatRepo: (id: string | null) => void;
   openConversation: (id: string) => Promise<void>;
   closeConversation: () => void;
-  newConversation: (repoId?: string | null) => Promise<string>;
+  newConversation: () => Promise<string>;
   rename: (id: string, title: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
   send: (text: string, model: string, abort: AbortController) => Promise<void>;
@@ -70,7 +69,7 @@ export const useChat = create<ChatState>()((set, get) => ({
   nextCursor: null,
   search: "",
   activeId: null,
-  newChatRepoId: null,
+  scopeId: null,
   messages: [],
   phase: "idle",
   requestId: null,
@@ -81,19 +80,21 @@ export const useChat = create<ChatState>()((set, get) => ({
   effort: loadEffort(),
   contextUsed: null,
 
-  async loadConversations() {
-    const page = await api.listConversations();
+  async loadConversations(projectId) {
+    const page = await api.listConversations({ project_id: projectId });
     set({
+      scopeId: projectId,
       conversations: page.items,
       hasMore: page.has_more,
       nextCursor: page.next_cursor,
+      search: "",
     });
   },
 
   async loadMore() {
     const s = get();
-    if (!s.nextCursor) return;
-    const page = await api.listConversations({ cursor: s.nextCursor });
+    if (!s.nextCursor || !s.scopeId) return;
+    const page = await api.listConversations({ project_id: s.scopeId, cursor: s.nextCursor });
     set({
       conversations: [...s.conversations, ...page.items],
       hasMore: page.has_more,
@@ -105,8 +106,10 @@ export const useChat = create<ChatState>()((set, get) => ({
     set({ search: q });
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = setTimeout(async () => {
+      const scopeId = get().scopeId;
+      if (!scopeId) return;
       try {
-        const page = await api.listConversations(q ? { q } : undefined);
+        const page = await api.listConversations({ project_id: scopeId, q: q || undefined });
         set({
           conversations: page.items,
           hasMore: page.has_more,
@@ -116,10 +119,6 @@ export const useChat = create<ChatState>()((set, get) => ({
         /* keep prior list; search is transient */
       }
     }, 250);
-  },
-
-  setNewChatRepo(id) {
-    set({ newChatRepoId: id });
   },
 
   async openConversation(id) {
@@ -151,11 +150,12 @@ export const useChat = create<ChatState>()((set, get) => ({
     });
   },
 
-  async newConversation(repoId) {
-    const conv = await api.createConversation({
-      repo_id: repoId ?? undefined,
-      model_default: undefined,
-    });
+  async newConversation() {
+    const scopeId = get().scopeId;
+    if (!scopeId) {
+      throw new Error("Select a project first — every conversation belongs to one.");
+    }
+    const conv = await api.createConversation({ project_id: scopeId });
     set((s) => ({
       conversations: [conv, ...s.conversations],
       activeId: conv.id,
@@ -199,7 +199,7 @@ export const useChat = create<ChatState>()((set, get) => ({
     if (s.phase !== "idle") return;
     let convId = s.activeId;
     if (!convId) {
-      convId = await get().newConversation(get().newChatRepoId);
+      convId = await get().newConversation();
     }
     const modelId = model;
 

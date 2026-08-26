@@ -66,6 +66,11 @@ class Repository(Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_commit_sha: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Owning project (exclusive: a repo serves at most one project). Unassigned
+    # when the project is deleted (SET NULL) or the user detaches the repo.
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), index=True
+    )
 
     files: Mapped[list["CodeFile"]] = relationship(
         back_populates="repository", cascade="all, delete-orphan"
@@ -73,6 +78,7 @@ class Repository(Base):
     chunks: Mapped[list["CodeChunk"]] = relationship(
         back_populates="repository", cascade="all, delete-orphan"
     )
+    project: Mapped["Project | None"] = relationship(back_populates="repository")
 
 
 class CodeFile(Base):
@@ -110,13 +116,40 @@ class CodeChunk(Base):
     repository: Mapped[Repository] = relationship(back_populates="chunks")
 
 
+class Project(Base):
+    """A project groups a repository (RAG + agent tools), its conversations,
+    and — implicitly — its commits. One repo per project (enforced by the
+    unique index on repositories.project_id, see init_db.py)."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    repository: Mapped["Repository | None"] = relationship(
+        back_populates="project", uselist=False
+    )
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", lazy="selectin",
+        order_by="Conversation.updated_at.desc()",
+    )
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    # Nullable: general chat is allowed; repo-bound chats carry repo_id.
-    repo_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("repositories.id", ondelete="SET NULL"))
+    # Every conversation belongs to a project (general chat = project without
+    # a repo). Deleting a project removes its conversations (DB cascade).
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
     title: Mapped[str] = mapped_column(String(255), default="New chat")
     model_default: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -124,6 +157,7 @@ class Conversation(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    project: Mapped[Project] = relationship(back_populates="conversations")
     messages: Mapped[list["Message"]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan", lazy="selectin",
         order_by="Message.sequence",

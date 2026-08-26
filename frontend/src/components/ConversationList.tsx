@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useChat } from "../store/chat";
-import { useRepos } from "../store/repos";
 
 function relTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -24,10 +23,7 @@ export default function ConversationList() {
     rename,
     remove,
     newConversation,
-    newChatRepoId,
-    setNewChatRepo,
   } = useChat();
-  const { repos } = useRepos();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -66,27 +62,12 @@ export default function ConversationList() {
   return (
     <div className="conv-panel">
       <div className="conv-new">
-        <label className="conv-repo-label">
-          <span>Repo (RAG)</span>
-          <select
-            value={newChatRepoId ?? ""}
-            onChange={(e) => setNewChatRepo(e.target.value || null)}
-            aria-label="Repository for new conversations"
-          >
-            <option value="">No repo (general)</option>
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.github_full_name}
-              </option>
-            ))}
-          </select>
-        </label>
         <button
           className="primary"
           disabled={busy}
           onClick={() =>
             act(async () => {
-              await newConversation(newChatRepoId);
+              await newConversation();
             })
           }
         >
@@ -136,10 +117,7 @@ export default function ConversationList() {
               <div className="conv-row">
                 <div className="conv-text">
                   <span className="conv-title">{c.title || "Untitled"}</span>
-                  <span className="conv-meta">
-                    {c.repo_name ? `${c.repo_name} · ` : ""}
-                    {relTime(c.updated_at)}
-                  </span>
+                  <span className="conv-meta">{relTime(c.updated_at)}</span>
                 </div>
                 <div className="conv-actions" onClick={(e) => e.stopPropagation()}>
                   <button

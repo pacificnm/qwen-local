@@ -24,7 +24,7 @@ from app.agents import qwen_assistant
 from app.api.conversations import _get_owned_conv
 from app.api.deps import get_current_user, get_db
 from app.core.settings import get_settings
-from app.db.models import Conversation, Message, Repository, User
+from app.db.models import Conversation, Message, Project, Repository, User
 from app.db.session import get_session_factory
 from app.llm.prompts import BASE_SYSTEM, build_system
 from app.repos.errors import SyncError
@@ -119,10 +119,16 @@ async def chat_stream(
     assistant_seq = int(next_seq) + 1
     is_first_exchange = int(prior_count) == 0
 
-    # A bound repo serves two purposes here: RAG context (top-8 chunks) and
-    # the target of the agent's repo tools (read/write/edit/commit).
+    # The conversation's project (when it has one) serves two purposes here:
+    # its repo provides RAG context (top-8 chunks) and the target of the
+    # agent's repo tools (read/write/edit/commit). Repo-less project = general.
     system = BASE_SYSTEM
-    repo_obj = await db.get(Repository, conv.repo_id) if conv.repo_id is not None else None
+    repo_obj = None
+    project = await db.get(Project, conv.project_id)
+    if project is not None:
+        repo_obj = (
+            await db.execute(select(Repository).where(Repository.project_id == project.id))
+        ).scalar_one_or_none()
     if repo_obj is not None:
         try:
             chunks = await retrieve_chunks(db, repo_id=repo_obj.id, query=body.message)

@@ -244,7 +244,9 @@ export default function ChatPane() {
                 This conversation reads <strong>{repoName}</strong> (RAG top-8).
               </p>
             ) : (
-              <p className="dim">No repo linked yet — pick one in the repo selector above "New conversation" to enable RAG.</p>
+              <p className="dim">
+                This project has no repository yet — attach one in the left pane to enable RAG.
+              </p>
             )}
           </div>
         )}
