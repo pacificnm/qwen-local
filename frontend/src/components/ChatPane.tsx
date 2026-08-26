@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { EFFORT_LEVELS, type ChatMessage, type Effort, type ToolCallInfo } from "../lib/api";
+import { onFileMention } from "../lib/fileMentionBus";
 import { useChat } from "../store/chat";
 import { useEditor } from "../store/editor";
 import { useModels } from "../store/models";
@@ -165,6 +166,7 @@ export default function ChatPane() {
 
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [streamErr, setStreamErr] = useState<string | null>(null);
 
@@ -184,6 +186,22 @@ export default function ChatPane() {
     () => () => {
       abortRef.current?.abort();
     },
+    [],
+  );
+
+  // "Add to Chat" from the file tree drops a path into the draft as its own line.
+  useEffect(
+    () =>
+      onFileMention((path) => {
+        setDraft((d) => (d.includes(path) ? d : `${d ? d.trimEnd() + "\n" : ""}${path}`));
+        const el = composerRef.current;
+        if (!el) return;
+        el.focus();
+        requestAnimationFrame(() => {
+          const len = el.value.length;
+          el.setSelectionRange(len, len);
+        });
+      }),
     [],
   );
 
@@ -214,27 +232,6 @@ export default function ChatPane() {
 
   return (
     <div className="chat-pane">
-      <header className="chat-head">
-        <div className="chat-head-title">
-          <span className="chat-title">{conv ? conv.title : "New chat"}</span>
-          {repoName && <span className="repo-chip">{repoName}</span>}
-        </div>
-        <div className="model-picker chat-model">
-          <select
-            value={selectedId}
-            disabled={!loaded || models.length === 0 || busy}
-            onChange={(e) => select(e.target.value)}
-            aria-label="Model"
-          >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </header>
-
       <div className="chat-scroll" ref={scrollRef}>
         {messages.length === 0 && !assistantText && phase !== "thinking" && (
           <div className="chat-welcome">
@@ -304,6 +301,7 @@ export default function ChatPane() {
       <div className="composer">
         <div className="composer-box">
           <textarea
+            ref={composerRef}
             rows={3}
             placeholder="Ask about your codebase… (Enter to send, Shift+Enter for newline)"
             value={draft}
@@ -319,6 +317,20 @@ export default function ChatPane() {
           />
           <div className="composer-bar">
             <div className="composer-bar-left">
+              <select
+                className="model-select"
+                value={selectedId}
+                disabled={!loaded || models.length === 0 || busy}
+                onChange={(e) => select(e.target.value)}
+                aria-label="Model"
+                title="Model"
+              >
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
               <select
                 className="effort-picker"
                 value={effort}

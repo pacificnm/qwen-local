@@ -137,6 +137,23 @@ async def test_read_file_missing_raises(tmp_path):
         gitops.read_file(tmp_path, "does/not/exist.py")
 
 
+async def test_list_file_paths_includes_untracked(tmp_path):
+    """Context-menu creates are untracked until committed — the file tree must
+    still show them (previously only `git ls-tree HEAD` / tracked files)."""
+    repo = tmp_path / "r"
+    _init_repo(str(repo))
+    (repo / "tracked.txt").write_text("t\n")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "base"], check=True, capture_output=True)
+    (repo / "new-from-menu.txt").write_text("n\n")
+
+    paths = await gitops.list_file_paths(repo)
+
+    assert "tracked.txt" in paths
+    assert "new-from-menu.txt" in paths
+    assert ".git" not in paths
+
+
 def test_scrub_redacts_pat():
     assert "secret123" not in gitops._scrub("url=https://x:secret123@h", "secret123")
     assert "[redacted]" in gitops._scrub("url=https://x:secret123@h", "secret123")
@@ -370,3 +387,62 @@ async def test_commit_workspace_rejects_empty_message(tmp_path):
     (ws / "o__r" / "d.txt").write_text("d\n")
     with pytest.raises(GitError):
         await gitops.commit_workspace(ws, "o/r", pat="", message="   ")
+
+
+# --- repo_state (Git tab snapshot) -------------------------------------------
+
+
+async def test_repo_state_parses_dirty_and_recent(tmp_path, monkeypatch):
+    """Snapshot parses porcelain status + NUL-separated log (short lines
+    under 4 chars are skipped; log lines missing fields too)."""
+    sep = "\x00"
+    log = "\n".join(f"sha{i:02d}{sep}auth{i}{sep}2026-08-0{i + 1}{sep}subject {i}" for i in range(10))
+
+    async def fake_run(args, pat, cwd=None, env_extra=None):
+        if args[1] == "branch":
+            return "main\n"
+        if args[1] == "rev-parse" and args[2] == "HEAD":
+            return "a" * 40 + "\n"
+        if args[1] == "status":
+            # M (staged) + space (unstaged), untracked, rename, and a
+            # malformed short line that must NOT appear in the result.
+            return "M  staged.py\n M unstaged.py\n?? brand_new.py\nR  old.py -> new.py\nab\n"
+        if args[1] == "log":
+            assert len(args) == 5 and args[2] == "-10", f"expected -10 cap: {args}"
+            # NULs must be git's %x00 escape — a raw NUL byte truncates argv.
+            assert args[4] == "--pretty=format:%h%x00%an%x00%ad%x00%s", args[4]
+            return log + "\n"
+        raise AssertionError(f"unexpected git call: {args}")
+
+    monkeypatch.setattr(gitops, "_run", fake_run)
+
+    state = await gitops.repo_state(tmp_path / "o__r", "o/r")
+    assert state["branch"] == "main"
+    assert state["head_sha"] == "a" * 40
+    assert state["dirty"] == [
+        {"status": "M", "path": "staged.py"},
+        {"status": "M", "path": "unstaged.py"},
+        {"status": "??", "path": "brand_new.py"},
+        {"status": "R", "path": "old.py -> new.py"},
+    ]
+    assert len(state["recent"]) == 10  # -10 cap honoured by git itself upstream
+    assert state["recent"][0] == {
+        "sha": "sha00", "author": "auth0", "date": "2026-08-01", "subject": "subject 0",
+    }
+
+
+async def test_repo_state_clean_tree_is_empty(tmp_path, monkeypatch):
+    async def fake_run(args, pat, cwd=None, env_extra=None):
+        if args[1] == "branch":
+            return "main\n"
+        if args[1] == "rev-parse" and args[2] == "HEAD":
+            return "b" * 40 + "\n"
+        if args[1] == "status":
+            return ""  # clean tree
+        if args[1] == "log":
+            return ""  # empty repo (no commits yet)
+        raise AssertionError(f"unexpected git call: {args}")
+
+    monkeypatch.setattr(gitops, "_run", fake_run)
+    state = await gitops.repo_state(tmp_path / "o__r", "o/r")
+    assert state == {"branch": "main", "head_sha": "b" * 40, "dirty": [], "recent": []}

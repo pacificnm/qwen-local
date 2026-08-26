@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
-import { DiffEditor, Editor } from "@monaco-editor/react";
-import "../lib/monaco";
-import { useChat } from "../store/chat";
 import { useEditor } from "../store/editor";
+import { useProjects } from "../store/projects";
 import { useRepos } from "../store/repos";
+import FileTree from "./FileTree";
 
 function slugify(input: string): string {
   const base = input.split("/").pop() ?? input;
@@ -15,15 +14,43 @@ function slugify(input: string): string {
   return slug || "edits";
 }
 
-function CommitForm() {
-  const { repos, load } = useRepos();
-  const conv = useChat((s) => s.conversations.find((c) => c.id === s.activeId)) ?? null;
+/** Repo the tabs operate on: what the Code tab loaded, else the active
+ * project's repo, else the focused tab's repo, else the first linked repo. */
+function useTabRepoId(): string | null {
+  const treeRepoId = useEditor((s) => s.treeRepoId);
+  const activeRepo = useProjects((s) => s.projects.find((p) => p.id === s.activeId)?.repo ?? null);
+  const focused = useEditor(
+    (s) => s.editorTabs.find((t) => t.id === s.activeTabId)?.repoId ?? null,
+  );
+  const repos = useRepos((s) => s.repos);
+  return treeRepoId ?? activeRepo?.id ?? focused ?? repos[0]?.id ?? null;
+}
+
+function NoRepoHint() {
+  return (
+    <div className="editor-empty">
+      <p className="dim">
+        No repository yet — select a project that has a repo, or link one in
+        the project card on the left.
+      </p>
+    </div>
+  );
+}
+
+function CodeTab() {
+  const repoId = useTabRepoId();
+  if (!repoId) return <NoRepoHint />;
+  return <FileTree repoId={repoId} />;
+}
+
+/** Commits the focused main-pane tab (the file open in the center editor). */
+function CommitForm({ repoId }: { repoId: string }) {
   const editor = useEditor();
-  const defaultRepoId = editor.fileRepoId ?? conv?.repo_id ?? repos[0]?.id ?? "";
-  const [repoId, setRepoId] = useState(defaultRepoId);
-  const [filePath, setFilePath] = useState(editor.filePath ?? "");
-  const [branch, setBranch] = useState(
-    editor.filePath ? `qwen-assist/${slugify(editor.filePath)}` : "qwen-assist/edits",
+  const focused = useEditor((s) => s.editorTabs.find((t) => t.id === s.activeTabId) ?? null);
+  const fileOpen = !!focused && focused.repoId === repoId && !!focused.path;
+
+  const [branch, setBranch] = useState(() =>
+    focused?.path ? `qwen-assist/${slugify(focused.path)}` : "qwen-assist/edits",
   );
   const [message, setMessage] = useState("");
   const [openPr, setOpenPr] = useState(true);
@@ -31,41 +58,22 @@ function CommitForm() {
   const [prBody, setPrBody] = useState("");
 
   useEffect(() => {
-    void load().catch(() => undefined);
-  }, [load]);
+    setBranch(focused?.path ? `qwen-assist/${slugify(focused.path)}` : "qwen-assist/edits");
+  }, [focused?.path]);
 
-  useEffect(() => {
-    setRepoId(editor.fileRepoId ?? conv?.repo_id ?? repos[0]?.id ?? "");
-    setFilePath(editor.filePath ?? "");
-    setBranch(editor.filePath ? `qwen-assist/${slugify(editor.filePath)}` : "qwen-assist/edits");
-    // reset only the derived fields; user edits to message/pr survive re-selects of the file
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor.open, editor.filePath, editor.fileRepoId]);
-
-  const disabled = editor.committing || !repoId || !filePath.trim() || !message.trim() || editor.working === "";
+  const disabled =
+    editor.committing || !fileOpen || !message.trim() || (focused?.working ?? "") === "";
 
   return (
     <div className="commit-form">
       <div className="commit-grid">
         <label>
-          Repo
-          <select value={repoId} onChange={(e) => setRepoId(e.target.value)} disabled={!!editor.fileRepoId}>
-            <option value="">— select repo —</option>
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.github_full_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          File path
-          <input
-            value={filePath}
-            placeholder="src/auth.py"
-            onChange={(e) => setFilePath(e.target.value)}
-            spellCheck={false}
-          />
+          File
+          {fileOpen ? (
+            <code className="commit-file">{focused?.path}</code>
+          ) : (
+            <span className="commit-file-muted">open a file tab in the center pane first</span>
+          )}
         </label>
         <label>
           Branch
@@ -103,13 +111,14 @@ function CommitForm() {
       )}
       <div className="commit-actions">
         <button
+          type="button"
           className="primary"
           disabled={disabled}
           onClick={() =>
             void editor
               .commit({
                 repoId,
-                filePath: filePath.trim(),
+                filePath: focused?.path ?? "",
                 message: message.trim(),
                 branch: branch.trim() || "qwen-assist/edits",
                 openPr,
@@ -132,73 +141,114 @@ function CommitForm() {
   );
 }
 
-function EditorBody() {
-  const editor = useEditor();
-  const showDiff = editor.view === "diff" && editor.original !== null;
+function GitTab() {
+  const repoId = useTabRepoId();
+  const git = useEditor((s) => s.git);
+  const gitLoading = useEditor((s) => s.gitLoading);
+  const gitError = useEditor((s) => s.gitError);
+  const commitResult = useEditor((s) => s.commitResult);
+  const commitError = useEditor((s) => s.commitError);
+  const repos = useRepos((s) => s.repos);
+
+  useEffect(() => {
+    if (repoId) void useEditor.getState().loadGit(repoId);
+  }, [repoId]);
+
+  if (!repoId) return <NoRepoHint />;
+
+  const repoName = repos.find((r) => r.id === repoId)?.github_full_name;
+  const load = () => {
+    if (repoId) void useEditor.getState().loadGit(repoId);
+  };
+
   return (
-    <div className="editor-body">
-      <div className="editor-head">
-        <div className="editor-path" title={editor.filePath ?? "chat snippet"}>
-          {editor.filePath ?? "chat snippet"}
+    <div className="gittab">
+      <div className="git-head">
+        <div className="git-head-main">
+          <div className="git-repo">{repoName ?? "—"}</div>
+          {git && (
+            <div className="git-branchline">
+              <span className="git-branch">● {git.branch || "detached HEAD"}</span>
+              <code className="git-sha">{git.head_sha.slice(0, 7)}</code>
+              {git.dirty.length > 0 ? (
+                <span className="git-dirtycount">{git.dirty.length} dirty</span>
+              ) : (
+                <span className="git-clean">clean</span>
+              )}
+            </div>
+          )}
         </div>
-        <div className="editor-viewtoggle" role="group" aria-label="View">
-          <button
-            className={!showDiff ? "active" : ""}
-            onClick={() => editor.setView("edit")}
-            disabled={!editor.filePath}
-          >
-            Edit
-          </button>
-          <button
-            className={showDiff ? "active" : ""}
-            onClick={() => editor.setView("diff")}
-            disabled={editor.original === null}
-            title={editor.original === null ? "Diff needs a repo file as the original" : "Repo original vs. current"}
-          >
-            Diff
-          </button>
-        </div>
-        <button className="editor-close" onClick={editor.reset}>
-          ✕
+        <button
+          type="button"
+          className="filetree-refresh"
+          title="Refresh git state"
+          disabled={gitLoading}
+          onClick={load}
+        >
+          ↻
         </button>
       </div>
 
-      <div className="monaco-box">
-        {showDiff ? (
-          <DiffEditor
-            original={editor.original ?? undefined}
-            modified={editor.working}
-            language={editor.language}
-            theme="vs-dark"
-            options={{ minimap: { enabled: false }, fontSize: 13, readOnly: false }}
-          />
-        ) : (
-          <Editor
-            height="100%"
-            language={editor.language}
-            value={editor.working}
-            onChange={(v) => editor.setWorking(v ?? "")}
-            theme="vs-dark"
-            options={{ minimap: { enabled: false }, fontSize: 13, wordWrap: "on" }}
-          />
-        )}
-      </div>
+      {gitError && <p className="banner banner-error">{gitError}</p>}
+      {gitLoading && !git && <p className="dim">Loading git state…</p>}
 
-      {editor.commitResult && (
+      {git && (
+        <>
+          <div className="git-section">
+            <h4 className="git-sec-title">Working tree</h4>
+            {git.dirty.length === 0 ? (
+              <p className="dim">Clean — no uncommitted changes.</p>
+            ) : (
+              <ul className="git-dirty">
+                {git.dirty.map((d) => (
+                  <li key={`${d.status}:${d.path}`}>
+                    <span className="git-status">{d.status}</span>
+                    <span className="git-dpath">{d.path}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="git-section">
+            <h4 className="git-sec-title">Recent commits</h4>
+            {git.recent.length === 0 ? (
+              <p className="dim">No commits yet.</p>
+            ) : (
+              <ul className="git-log">
+                {git.recent.map((c) => (
+                  <li key={c.sha}>
+                    <code className="git-csha">{c.sha}</code>
+                    <span className="git-subject" title={c.subject}>
+                      {c.subject}
+                    </span>
+                    <span className="git-cmeta">
+                      {c.author} · {c.date}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+
+      {git && <CommitForm repoId={repoId} />}
+      {!git && !gitError && (
+        <div className="commit-card">
+          <p className="dim">Git state is required to commit (the sync clone must exist).</p>
+        </div>
+      )}
+
+      {commitResult && (
         <div className="banner banner-ok" role="status">
           <div>
-            <strong>{editor.commitResult.branch}</strong> · commit{" "}
-            <code>{editor.commitResult.commit_sha.slice(0, 8)}</code> pushed
-            {editor.commitResult.pr_url ? (
+            <strong>{commitResult.branch}</strong> · commit{" "}
+            <code>{commitResult.commit_sha.slice(0, 8)}</code> pushed
+            {commitResult.pr_url ? (
               <>
                 {" "}
                 →{" "}
-                <a
-                  href={editor.commitResult.pr_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="pr-link"
-                >
+                <a href={commitResult.pr_url} target="_blank" rel="noopener noreferrer" className="pr-link">
                   open PR
                 </a>
               </>
@@ -207,98 +257,71 @@ function EditorBody() {
             )}
             <span className="banner-dim"> — recorded in the active conversation</span>
           </div>
-          <button onClick={editor.clearResult}>dismiss</button>
+          <button onClick={() => useEditor.getState().clearResult()}>dismiss</button>
         </div>
       )}
-      {editor.commitError && (
+      {commitError && (
         <div className="banner banner-error" role="alert">
-          <span>{editor.commitError}</span>
-          <button onClick={editor.clearResult}>dismiss</button>
+          <span>{commitError}</span>
+          <button onClick={() => useEditor.getState().clearResult()}>dismiss</button>
         </div>
       )}
-
-      {!editor.commitResult && !editor.commitError && <CommitForm />}
-    </div>
-  );
-}
-
-function EmptyState() {
-  const editor = useEditor();
-  const { repos, load, loaded } = useRepos();
-  const [repoId, setRepoId] = useState("");
-  const [path, setPath] = useState("");
-
-  useEffect(() => {
-    void load().catch(() => undefined);
-  }, [load]);
-
-  useEffect(() => {
-    if (!repoId) return;
-    void editor.loadPickerFiles(repoId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repoId]);
-
-  return (
-    <div className="editor-empty">
-      <p className="dim">
-        Open a repo file to edit and commit it to GitHub, or click{" "}
-        <span className="codeblock-btn-sample">⧉ Open in editor</span> on any code block in the chat.
-      </p>
-      <label className="editor-empty-label">
-        Repository
-        <select
-          value={repoId}
-          onChange={(e) => {
-            setRepoId(e.target.value);
-            setPath("");
-          }}
-          disabled={!loaded || repos.length === 0}
-        >
-          <option value="">— select repo —</option>
-          {repos.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.github_full_name}
-            </option>
-          ))}
-        </select>
-      </label>
-      {editor.pickerError && <p className="banner banner-error">{editor.pickerError}</p>}
-      <label className="editor-empty-label">
-        File
-        <select
-          value={path}
-          onChange={(e) => {
-            setPath(e.target.value);
-            if (e.target.value && repoId) void editor.openRepoFile(repoId, e.target.value);
-          }}
-          disabled={!repoId || editor.pickerLoading || editor.pickerPaths.length === 0}
-        >
-          <option value="">
-            {editor.pickerLoading
-              ? "Loading files…"
-              : editor.pickerPaths.length === 0
-                ? "No files yet"
-                : "— select file —"}
-          </option>
-          {editor.pickerPaths.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
-      </label>
-      {repos.length === 0 && <p className="dim">No repositories linked yet — add one on the left.</p>}
     </div>
   );
 }
 
 export default function EditorPane() {
-  const open = useEditor((s) => s.open);
+  const tab = useEditor((s) => s.tab);
+  const activeId = useProjects((s) => s.activeId);
+  const activeRepoId = useProjects(
+    (s) => s.projects.find((p) => p.id === s.activeId)?.repo?.id ?? null,
+  );
+
+  // Selecting a project defaults the tabs to that repo on the Code tab:
+  // close all open editor tabs and preload its tree + git snapshot.
+  useEffect(() => {
+    const ed = useEditor.getState();
+    ed.reset();
+    if (activeRepoId) {
+      void ed.loadTree(activeRepoId);
+      void ed.loadGit(activeRepoId);
+    }
+  }, [activeId, activeRepoId]);
+
+  const setTab = (t: "code" | "git") => useEditor.getState().setTab(t);
+
   return (
     <div className="editor-pane">
-      <div className="pane-title">Code</div>
-      <div className="editor-scroll">
-        {open ? <EditorBody /> : <EmptyState />}
+      <div className="rtabbar" role="tablist" aria-label="Panel">
+        <button
+          role="tab"
+          id="rtab-code"
+          aria-selected={tab === "code"}
+          aria-controls="rtab-panes"
+          className={tab === "code" ? "active" : ""}
+          onClick={() => setTab("code")}
+        >
+          Code
+        </button>
+        <button
+          role="tab"
+          id="rtab-git"
+          aria-selected={tab === "git"}
+          aria-controls="rtab-panes"
+          className={tab === "git" ? "active" : ""}
+          onClick={() => setTab("git")}
+        >
+          Git
+        </button>
+      </div>
+
+      <div className="editor-scroll" id="rtab-panes">
+        <section className={tab === "code" ? "tabpane" : "tabpane hidden"}>
+          <CodeTab />
+        </section>
+        <section className={tab === "git" ? "tabpane" : "tabpane hidden"}>
+          <GitTab />
+        </section>
       </div>
     </div>
   );

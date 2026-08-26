@@ -7,6 +7,7 @@ upstream default, commit the edited file, push, optionally open a PR.
 
 import asyncio
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -17,6 +18,7 @@ from app.core.settings import get_settings
 from app.db.models import Repository, User
 from app.repos import gitops
 from app.repos.errors import (
+    FileExists,
     FileNotFound,
     GitError,
     GithubApiError,
@@ -41,6 +43,24 @@ class CommitIn(BaseModel):
     open_pr: bool = False
     pr_title: str | None = Field(default=None, max_length=300)
     pr_body: str | None = Field(default=None, max_length=20000)
+
+
+class RenameIn(BaseModel):
+    from_path: str = Field(min_length=1, max_length=1024)
+    to_path: str = Field(min_length=1, max_length=1024)
+
+
+class DeleteIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+
+
+class CreateIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    content: str = Field(default="", max_length=MAX_CONTENT)
+
+
+class FolderIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
 
 
 async def _get_repo(db: AsyncSession, repo_id: uuid.UUID) -> Repository:
@@ -82,6 +102,106 @@ async def read_repo_file(
     if len(content.encode("utf-8")) > MAX_FILE_READ:
         raise HTTPException(status_code=413, detail="file exceeds the 1 MB editor limit")
     return {"path": path, "content": content}
+
+
+def _worktree(repo: Repository) -> Path:
+    repo_dir = gitops.workspace_repo_dir(workspace(), repo.github_full_name)
+    if not repo_dir.joinpath(".git").is_dir():
+        raise HTTPException(status_code=502, detail="workspace clone missing — sync the repo first")
+    return repo_dir
+
+
+@router.post("/repos/{repo_id}/files/rename", status_code=201)
+async def rename_repo_file(
+    repo_id: uuid.UUID,
+    body: RenameIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Context-menu Rename: move a file or folder inside the local clone."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    try:
+        await asyncio.to_thread(gitops.rename_entry, repo_dir, body.from_path, body.to_path)
+    except FileNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExists as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"path": body.to_path}
+
+
+@router.delete("/repos/{repo_id}/file", status_code=201)
+async def delete_repo_file(
+    repo_id: uuid.UUID,
+    body: DeleteIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Context-menu Delete: remove a file or folder from the local clone."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    try:
+        await asyncio.to_thread(gitops.delete_entry, repo_dir, body.path)
+    except FileNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"deleted": body.path}
+
+
+@router.post("/repos/{repo_id}/files/create", status_code=201)
+async def create_repo_file(
+    repo_id: uuid.UUID,
+    body: CreateIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Context-menu Paste: create a new file from the clipboard content."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    try:
+        await asyncio.to_thread(gitops.create_file, repo_dir, body.path, body.content)
+    except FileExists as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"path": body.path}
+
+
+@router.post("/repos/{repo_id}/folders", status_code=201)
+async def create_repo_folder(
+    repo_id: uuid.UUID,
+    body: FolderIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Context-menu "New Folder": create a folder (with a `.gitkeep`) inside the clone."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    try:
+        await asyncio.to_thread(gitops.create_folder, repo_dir, body.path)
+    except FileExists as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"path": body.path}
+
+
+@router.get("/repos/{repo_id}/git")
+async def repo_git_state(
+    repo_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Branch, dirty working-tree entries, and the last 10 commits — Git tab UI."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = gitops.workspace_repo_dir(workspace(), repo.github_full_name)
+    if not repo_dir.joinpath(".git").is_dir():
+        raise HTTPException(status_code=502, detail="workspace clone missing — sync the repo first")
+    state = await gitops.repo_state(repo_dir, repo.github_full_name)
+    return {"repo_id": str(repo.id), **state}
 
 
 @router.post("/commit", status_code=201)
