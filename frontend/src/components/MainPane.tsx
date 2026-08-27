@@ -1,6 +1,7 @@
 import { DiffEditor, Editor } from "@monaco-editor/react";
 import "../lib/monaco";
 import ChatPane from "./ChatPane";
+import TerminalDock from "./TerminalDock";
 import { useEditor, type EditorTab } from "../store/editor";
 
 /** One editor tab's body: head (path + view toggle) + Monaco + commit hint. */
@@ -146,6 +147,8 @@ export default function MainPane() {
           </section>
         )}
       </div>
+
+      <TerminalDock />
     </main>
   );
 }

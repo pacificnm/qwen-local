@@ -36,6 +36,12 @@ services:
       # Absolute container path for git clones (bind mount below); overrides
       # the relative default in app/repos/sync.py for host-local runs.
       WORKSPACE_DIR: "/srv/app/workspace"
+      # Host-side path of ./workspace (left column of the bind mount). The
+      # terminal container's `/repo` bind must be resolved against HOST paths,
+      # and the docker daemon runs on the host — so this is the host abs path,
+      # not the container WORKSPACE_DIR. The repo slug (owner/name) is appended
+      # by app/api/terminals.py.
+      WORKSPACE_HOST_DIR: "/data/projects/chat.folding-os.com/workspace"
     volumes:
       # git clones for the ingestion pipeline; host dir pre-chowned to 1000
       # (the container `appuser` UID) so it is writable.

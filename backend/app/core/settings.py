@@ -88,6 +88,28 @@ class Settings(BaseSettings):
     # dev runs (in compose the image is built by the `sandbox-image` service).
     sandbox_build_context: str = "sandbox"
 
+    # --- Terminal sandbox (interactive, persistent; spec: VSCode-style dock) ---
+    # Separate profile from the one-shot Code Interpreter sandbox: the terminal
+    # container stays alive, is network-enabled, and gets a writable workspace
+    # so it can be a real shell. It is containerized and never touches the host.
+    # Reuses the sandbox runtime image (which gains bash + common tools).
+    terminal_idle_seconds: int = 1800  # reap a sandbox with no live sessions after this long
+    terminal_memory: str = "1g"
+    terminal_cpus: str = "2"
+    # "bridge" gives the terminal internet access (the Code Interpreter keeps
+    # `sandbox_network=none`); "none" reverts it to offline.
+    terminal_network: str = "bridge"
+    # Runs as the same UID that owns the host clone (appuser=1000) so the
+    # mounted /repo is read+write from inside the container.
+    terminal_user: str = "1000:1000"
+    # Host-side path of the workspace dir, for the `/repo` bind mount. The
+    # backend runs *in* a container (workspace at /srv/app/workspace) while the
+    # docker daemon (on the host) resolves bind sources against HOST paths, so
+    # the container path is unusable there. Empty (default) falls back to the
+    # `workspace_dir` path — correct for host-local dev runs where the backend
+    # and daemon share a filesystem. docker-compose sets it to the host path.
+    workspace_host_dir: str = ""
+
     # --- Container -> host reachability ---
     # Empty on the host itself (the localhost values above are correct there).
     # docker-compose sets this to the host's LAN IP (192.168.88.10).
