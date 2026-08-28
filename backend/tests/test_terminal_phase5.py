@@ -215,6 +215,63 @@ def test_create_args_mounts_repo_when_requested():
     assert "-v /data/projects/x/workspace/owner__repo:/repo" in joined
 
 
+def test_create_args_binds_port_when_pair_supplied():
+    mgr = make_manager(FakeTerminalDocker())
+    args = mgr._create_args(TAG, "qcterm-abc", repo_mount=None, host_port=3000, container_port=80)
+    assert "-p" in args
+    # the bind sits before the image and is exactly the project's pair
+    assert args.index("-p") < args.index("qwen-code-sandbox:latest")
+    assert args[args.index("-p") + 1] == "3000:80"
+
+
+def test_create_args_uses_explicit_override_pair():
+    mgr = make_manager(FakeTerminalDocker())
+    args = mgr._create_args(
+        TAG, "qcterm-abc", repo_mount="/data/x/workspace/owner__repo",
+        host_port=8080, container_port=3000,
+    )
+    assert args[args.index("-p") + 1] == "8080:3000"
+
+
+def test_create_args_omits_bind_when_pair_incomplete_or_invalid():
+    mgr = make_manager(FakeTerminalDocker())
+    cases = (
+        {"host_port": 3000},                          # container side missing
+        {"container_port": 80},                       # host side missing
+        {"host_port": 0, "container_port": 80},       # host out of range
+        {"host_port": "nope", "container_port": 80},  # non-int
+    )
+    for kwargs in cases:
+        args = mgr._create_args(TAG, "qcterm-abc", repo_mount=None, **kwargs)
+        assert "-p" not in args, kwargs
+
+
+def test_port_binding_normalization():
+    bind = TerminalManager._port_binding
+    assert bind(3000, 80) == "3000:80"
+    assert bind(8080, 3000) == "8080:3000"
+    assert bind(3000, None) is None
+    assert bind(None, 80) is None
+    assert bind(0, 80) is None
+    assert bind(3000, 999_999_999) is None
+
+
+def test_spawn_threads_ports_into_run_args():
+    fd = FakeTerminalDocker()
+    mgr = make_manager(fd)
+    _sync(mgr.spawn(TAG, repo_host_dir=None, host_port=3000, container_port=80))
+    run = next(a for a in fd.exec_calls if a[0] == "run")
+    assert run[run.index("-p") + 1] == "3000:80"
+
+
+def test_spawn_without_ports_omits_bind():
+    fd = FakeTerminalDocker()
+    mgr = make_manager(fd)
+    _sync(mgr.spawn(TAG, repo_host_dir=None, cols=80, rows=24))
+    run = next(a for a in fd.exec_calls if a[0] == "run")
+    assert "-p" not in run
+
+
 def test_spawn_primes_resize_and_tracks_session():
     fd = FakeTerminalDocker()
     mgr = make_manager(fd)

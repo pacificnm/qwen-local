@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.api.repos import RepoOut, _repo_out
-from app.db.models import Conversation, Project, Repository, User
+from app.db.models import Conversation, Project, ProjectSettings, Repository, User
 from app.repos import gitops
 from app.repos.errors import SyncError
 from app.repos.sync import submit
@@ -40,6 +40,39 @@ class ProjectOut(BaseModel):
     updated_at: datetime
     repo: RepoOut | None
     conversation_count: int
+
+
+class SettingsIn(BaseModel):
+    sandbox_port: int = Field(default=9000, ge=1, le=65535)
+    sandbox_container_port: int = Field(default=80, ge=1, le=65535)
+    rag_top_k: int = Field(default=8, ge=1, le=200)
+    rag_max_chars: int = Field(default=12000, ge=1, le=100000)
+    mcp_servers: list | None = None
+    model_default: str | None = Field(default=None, max_length=512)
+
+
+class SettingsOut(BaseModel):
+    project_id: uuid.UUID
+    sandbox_port: int
+    sandbox_container_port: int
+    rag_top_k: int
+    rag_max_chars: int
+    mcp_servers: list | None
+    model_default: str | None
+    updated_at: datetime
+
+
+def _settings_out(db_row: ProjectSettings, project_id: uuid.UUID) -> SettingsOut:
+    return SettingsOut(
+        project_id=project_id,
+        sandbox_port=db_row.sandbox_port,
+        sandbox_container_port=db_row.sandbox_container_port,
+        rag_top_k=db_row.rag_top_k,
+        rag_max_chars=db_row.rag_max_chars,
+        mcp_servers=db_row.mcp_servers,
+        model_default=db_row.model_default,
+        updated_at=db_row.updated_at,
+    )
 
 
 async def _get_project(db: AsyncSession, project_id: uuid.UUID, user: User) -> Project:
@@ -204,3 +237,56 @@ async def delete_project(
     await db.delete(project)
     await db.commit()
     return Response(status_code=204)
+
+
+async def _get_or_create_settings(
+    db: AsyncSession, project_id: uuid.UUID
+) -> ProjectSettings:
+    """Return the project's one-to-one settings row, creating it with defaults
+    (or restoring the DB defaults after an out-of-band delete) if missing."""
+    row = (
+        (
+            await db.execute(
+                select(ProjectSettings).where(ProjectSettings.project_id == project_id)
+            )
+        )
+        .scalars()
+        .one_or_none()
+    )
+    if row is None:
+        row = ProjectSettings(project_id=project_id)
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+    return row
+
+
+@router.get("/{project_id}/settings", response_model=SettingsOut)
+async def get_settings(
+    project_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    project = await _get_project(db, project_id, user)
+    row = await _get_or_create_settings(db, project.id)
+    return _settings_out(row, project.id)
+
+
+@router.put("/{project_id}/settings", response_model=SettingsOut)
+async def put_settings(
+    project_id: uuid.UUID,
+    body: SettingsIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    project = await _get_project(db, project_id, user)
+    row = await _get_or_create_settings(db, project.id)
+    row.sandbox_port = body.sandbox_port
+    row.sandbox_container_port = body.sandbox_container_port
+    row.rag_top_k = body.rag_top_k
+    row.rag_max_chars = body.rag_max_chars
+    row.mcp_servers = body.mcp_servers
+    row.model_default = body.model_default
+    await db.commit()
+    await db.refresh(row)
+    return _settings_out(row, project.id)

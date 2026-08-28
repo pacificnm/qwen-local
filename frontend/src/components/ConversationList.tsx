@@ -22,24 +22,19 @@ export default function ConversationList() {
     openConversation,
     rename,
     remove,
-    newConversation,
   } = useChat();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   async function act(fn: () => Promise<void>) {
-    setBusy(true);
     setErr(null);
     try {
       await fn();
     } catch (e) {
       setErr(message(e));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -61,20 +56,6 @@ export default function ConversationList() {
 
   return (
     <div className="conv-panel">
-      <div className="conv-new">
-        <button
-          className="primary"
-          disabled={busy}
-          onClick={() =>
-            act(async () => {
-              await newConversation();
-            })
-          }
-        >
-          + New conversation
-        </button>
-      </div>
-
       <input
         placeholder="Search conversations…"
         value={search}

@@ -4,13 +4,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { useProjects } from "../store/projects";
+import { useTerminalUI } from "../store/terminal";
 import { connectTerminal, type TerminalConnection } from "../lib/terminal";
 
 const HEIGHT_KEY = "qc.terminalHeight";
-const COLLAPSED_KEY = "qc.terminalCollapsed";
 const MIN_H = 110;
 const DEFAULT_H = 180;
-const BAR_H = 35;
 
 function loadHeight(): number {
   try {
@@ -22,14 +21,6 @@ function loadHeight(): number {
   return DEFAULT_H;
 }
 
-function loadCollapsed(): boolean {
-  try {
-    return localStorage.getItem(COLLAPSED_KEY) !== "false";
-  } catch {
-    return true;
-  }
-}
-
 function persist(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
@@ -38,17 +29,17 @@ function persist(key: string, value: string) {
   }
 }
 
-type TermState = "idle" | "connecting" | "running" | "error" | "closed";
-
+/** Bottom of the center MainPane: the live xterm shell. The launch toggle,
+ *  repo name, and status badge live in the bottom-left footer (see
+ *  `useTerminalUI`); there is no header bar. Renders nothing while closed. */
 export default function TerminalDock() {
   const repoId = useProjects((s) => s.projects.find((p) => p.id === s.activeId)?.repo?.id ?? null);
   const repoName = useProjects(
     (s) => s.projects.find((p) => p.id === s.activeId)?.repo?.github_full_name ?? null,
   );
+  const { open, setStatus, setRepoName } = useTerminalUI();
 
-  const [collapsed, setCollapsed] = useState<boolean>(() => loadCollapsed());
   const [height, setHeight] = useState<number>(() => loadHeight());
-  const [state, setState] = useState<TermState>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
@@ -58,11 +49,27 @@ export default function TerminalDock() {
   const connRef = useRef<TerminalConnection | null>(null);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
-  // Terminal + WebSocket lifecycle: (re)create when expanded/repo changes/nonce.
+  // Publish the repo name so the bottom-left launcher icon can show it.
   useEffect(() => {
-    if (collapsed || !repoId) return;
+    setRepoName(repoName ?? "");
+  }, [repoName, setRepoName]);
+
+  // Terminal + WebSocket lifecycle: (re)create when opened / repo changes / retry nonce.
+  useEffect(() => {
+    if (!open) {
+      setStatus("idle");
+      return;
+    }
+    if (!repoId) {
+      setErrorMsg(null);
+      setStatus("idle");
+      return;
+    }
     const host = hostRef.current;
     if (!host) return;
+
+    setErrorMsg(null);
+    setStatus("connecting");
 
     const term = new XTerm({
       cursorBlink: true,
@@ -97,24 +104,27 @@ export default function TerminalDock() {
 
     const conn = connectTerminal(repoId);
     connRef.current = conn;
-    setState("connecting");
-    setErrorMsg(null);
 
     conn.onReady((info) => {
-      setState("running");
+      setStatus("running");
       const tag = info.tag ? ` · ${info.tag}` : "";
       term.write(`\x1b[90m▸ sandbox ${info.cwd || ""}${tag}\x1b[0m\n`);
+      if (info.host_port) {
+        term.write(
+          `\x1b[90m  ↳ dev servers reachable at http://localhost:${info.host_port}\x1b[0m\n`,
+        );
+      }
       doFit();
       term.focus();
     });
     conn.onOutput((bytes) => term.write(bytes));
     conn.onError((msg) => {
       setErrorMsg(msg);
-      setState("error");
+      setStatus("error");
       term.write(`\x1b[31m[terminal error]\x1b[0m ${msg}\n`);
     });
     conn.onClose(() => {
-      setState("closed");
+      setStatus("closed");
       term.write(`\x1b[90m[connection closed — reopen to start a new shell]\x1b[0m\n`);
     });
 
@@ -139,14 +149,11 @@ export default function TerminalDock() {
       connRef.current = null;
     };
     // termRef/fitRef/connRef/dragRef are refs — intentionally excluded from deps.
-  }, [collapsed, repoId, nonce]);
+  }, [open, repoId, nonce, setStatus]);
 
-  function toggle() {
-    setCollapsed((c) => {
-      const next = !c;
-      persist(COLLAPSED_KEY, String(next));
-      return next;
-    });
+  function onReopen() {
+    setErrorMsg(null);
+    setNonce((n) => n + 1);
   }
 
   function onHandleDown(e: ReactPointerEvent<HTMLDivElement>) {
@@ -171,85 +178,38 @@ export default function TerminalDock() {
     window.addEventListener("pointerup", up);
   }
 
-  function onBarKey(e: React.KeyboardEvent) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      toggle();
-    }
-  }
-
-  const stateBadge =
-    state === "running" ? "live" : state === "connecting" ? "connecting…" : state === "closed" ? "closed" : state === "error" ? "error" : "idle";
+  if (!open) return null;
 
   return (
-    <section
-      className={`tdock ${collapsed ? "tdock-collapsed" : "tdock-open"}`}
-      style={collapsed ? undefined : { height: BAR_H + height }}
-      aria-label="Sandbox terminal"
-    >
-      {!collapsed && (
-        <div
-          className="tdock-handle"
-          onPointerDown={onHandleDown}
-          title="Drag to resize terminal height"
-          role="separator"
-          aria-orientation="horizontal"
-        />
-      )}
-
+    <section className="tdock tdock-open" style={{ height }} aria-label="Sandbox terminal">
       <div
-        className="tdock-bar"
-        role="button"
-        tabIndex={0}
-        aria-expanded={!collapsed}
-        onClick={toggle}
-        onKeyDown={onBarKey}
-      >
-        <span className="tdock-title">
-          <span className="tdock-ico" aria-hidden>
-            ▣
-          </span>
-          Terminal
-          {repoName && (
-            <span className="tdock-repo" title={repoName}>
-              {repoName}
-            </span>
-          )}
-        </span>
-        <span className={`tdock-status tdock-status--${state}`}>{stateBadge}</span>
-        <span className="tdock-chevron" aria-hidden>
-          {collapsed ? "▴" : "▾"}
-        </span>
+        className="tdock-handle"
+        onPointerDown={onHandleDown}
+        title="Drag to resize terminal height"
+        role="separator"
+        aria-orientation="horizontal"
+      />
+      <div className="tdock-panel">
+        {repoId ? (
+          <>
+            {errorMsg && (
+              <div className="tdock-errorbanner">
+                <span title={errorMsg}>{errorMsg}</span>
+                <button type="button" className="tdock-reopen" onClick={() => onReopen()}>
+                  Reopen
+                </button>
+              </div>
+            )}
+            <div className="tdock-termhost" ref={hostRef} />
+          </>
+        ) : (
+          <p className="tdock-empty">
+            No repository is linked to this project. Open <code>Settings</code> (bottom-left) and
+            attach one to get a live sandbox terminal with a writable <code>/workspace</code> and the
+            repo at <code>/repo</code>.
+          </p>
+        )}
       </div>
-
-      {collapsed && !repoId && (
-        <div className="tdock-panel tdock-panel--hint">
-          <p className="tdock-empty">Expand to open a sandbox shell — link a repository first.</p>
-        </div>
-      )}
-
-      {!collapsed && (
-        <div className="tdock-panel">
-          {!repoId ? (
-            <p className="tdock-empty">
-              No repository is linked to this project. Link one (top-left, “Link repo”) to get a live
-              sandbox terminal with a writable <code>/workspace</code> and the repo at <code>/repo</code>.
-            </p>
-          ) : (
-            <>
-              {errorMsg && state === "error" && (
-                <div className="tdock-errorbanner">
-                  <span title={errorMsg}>{errorMsg}</span>
-                  <button type="button" className="tdock-reopen" onClick={() => setNonce((n) => n + 1)}>
-                    Reopen
-                  </button>
-                </div>
-              )}
-              <div className="tdock-termhost" ref={hostRef} />
-            </>
-          )}
-        </div>
-      )}
     </section>
   );
 }

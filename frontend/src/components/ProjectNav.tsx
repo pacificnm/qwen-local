@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useProjects } from "../store/projects";
 
 /** Left-pane "Projects" area: folder list + inline new-project form.
- *  Selecting a folder reveals its repo (ProjectRepoCard) and its
- *  conversations (ConversationList) in the parent Shell. */
+ *  Selecting a folder reveals its conversations (ConversationList) in the
+ *  parent Shell; repo attach/sync/detach now live in the settings modal. */
 export default function ProjectNav() {
   const { projects, activeId, loaded, busy, error, setActive, create, rename, remove } =
     useProjects();

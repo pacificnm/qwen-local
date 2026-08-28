@@ -156,6 +156,24 @@ async def main() -> None:
         await conn.execute(text("ALTER TABLE conversations DROP COLUMN IF EXISTS repo_id"))
     print("✓ projects migration applied (idempotent)")
 
+    # 2c) ProjectSettings backfill — step 2's create_all already built the new
+    #  project_settings table on an existing DB; give every pre-existing project
+    #  a default settings row (sandbox ports, RAG knobs, MCP list) so per-project
+    #  config works out of the box. Idempotent: the NOT EXISTS guard skips projects
+    #  that already have a row, so re-runs add nothing.
+    MIGRATE_PROJECT_SETTINGS = [
+        "INSERT INTO project_settings "
+        "(id, project_id, sandbox_port, sandbox_container_port, rag_top_k, "
+        " rag_max_chars, mcp_servers, model_default, created_at, updated_at) "
+        "SELECT gen_random_uuid(), p.id, 9000, 80, 8, 12000, NULL, NULL, now(), now() "
+        "FROM projects p "
+        "WHERE NOT EXISTS (SELECT 1 FROM project_settings ps WHERE ps.project_id = p.id)",
+    ]
+    for ddl in MIGRATE_PROJECT_SETTINGS:
+        async with engine.begin() as conn:
+            await conn.execute(text(ddl))
+    print("✓ project_settings backfilled for existing projects (idempotent)")
+
     # 3) HNSW index on embeddings.
     async with engine.begin() as conn:
         await conn.execute(text(HNSW_INDEX))

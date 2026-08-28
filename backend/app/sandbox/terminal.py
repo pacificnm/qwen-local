@@ -10,8 +10,14 @@ Lifecycle per ``docker`` invocation (the backend drives the host docker socket
 through the CLI baked into its image — same seam style as manager.py):
 
     docker run -d --name qcterm-<x> --memory .. --cpus .. --network bridge
-        --user 1000:1000 -v vol:/workspace [-v <host>:/repo] <image> sleep infinity
+        --user 1000:1000 -v vol:/workspace [-v <host>:/repo]
+        [-p HOST_PORT:CONTAINER_PORT]  <image> sleep infinity
     docker exec -i qcterm-<x> python3 /ptymaster.py      (one bash, per session)
+
+The optional ``-p`` bind exposes the sandbox to the host so dev servers (Vite/
+Express) can be reached at ``http://localhost:HOST_PORT``. The pair comes from
+the project's ``ProjectSettings`` (supplied by the caller at spawn time — the
+manager itself stays DB-free), so it is not hardcoded here.
 
 Framing to the bridge (over the exec stdin, fd 0) — see sandbox/bridge.py:
     0x01 <uint32 BE len> <raw>   INPUT   (write bytes into the pty)
@@ -268,7 +274,33 @@ class TerminalManager:
         )
         return rc == 0 and out.strip() == "true"
 
-    def _create_args(self, tag: str, name: str, repo_mount: str | None) -> list[str]:
+    @staticmethod
+    def _port_binding(host_port: int | None, container_port: int | None) -> str | None:
+        """Normalize a per-project port pair to a ``-p host:container`` binding.
+
+        Returns ``None`` unless BOTH sides are supplied and each is a valid
+        1-65535 port — a half pair (or an out-of-range value) is better left
+        unbound than bound to a half-configured mapping.
+        """
+        if host_port is None or container_port is None:
+            return None
+        try:
+            host = int(host_port)
+            cont = int(container_port)
+        except (TypeError, ValueError):
+            return None
+        if not (1 <= host <= 65535 and 1 <= cont <= 65535):
+            return None
+        return f"{host}:{cont}"
+
+    def _create_args(
+        self,
+        tag: str,
+        name: str,
+        repo_mount: str | None,
+        host_port: int | None = None,
+        container_port: int | None = None,
+    ) -> list[str]:
         # /workspace volume is keyed by the REPO tag (not the random container
         # name) so scratch state is preserved whenever the tag's container is
         # reaped and re-created.
@@ -289,17 +321,29 @@ class TerminalManager:
         ]
         if repo_mount:
             args += ["-v", f"{repo_mount}:/repo"]
+        binding = self._port_binding(host_port, container_port)
+        if binding is not None:
+            args += ["-p", binding]
         args += [self.image_name, "sleep", "infinity"]
         return args
 
     async def ensure_container(
-        self, tag: str, repo_host_dir: str | None = None
+        self,
+        tag: str,
+        repo_host_dir: str | None = None,
+        host_port: int | None = None,
+        container_port: int | None = None,
     ) -> tuple[str, str]:
         """Return (container_name, cwd) for `tag`, creating the container if needed.
 
         Reuses a live tracked container; recreates if the tracked one died. The
         same `tag` (repo) always reuses both its container and its /workspace
         volume, so scratch state survives across idle reaps and restarts.
+
+        ``host_port``/``container_port`` (the project's sandbox ``-p`` pair) are
+        applied at container creation; an already-running tracked container was
+        bound when it started, so a later changed port only takes effect on the
+        next creation — the manager can't re-port a live container.
         """
         async with self._lock:
             tracked = self._containers.get(tag)
@@ -313,7 +357,7 @@ class TerminalManager:
             # image seeds it with 1000:1000 ownership on first use).
             await self._exec(["volume", "create", f"qcterm-ws-{_safe_tag(tag)}"], timeout=30)
             name = f"{NAME_PREFIX}{uuid.uuid4().hex[:12]}"
-            args = self._create_args(tag, name, repo_host_dir)
+            args = self._create_args(tag, name, repo_host_dir, host_port, container_port)
             rc, out, err = await self._exec(args, timeout=120)
             if rc != 0:
                 raise TerminalError(f"terminal container create failed (exit {rc}): {err or out}")
@@ -327,9 +371,19 @@ class TerminalManager:
         repo_host_dir: str | None = None,
         cols: int = 80,
         rows: int = 24,
+        host_port: int | None = None,
+        container_port: int | None = None,
     ) -> TerminalSession:
-        """Create/attach a container and start a fresh bash session in it."""
-        name, cwd = await self.ensure_container(tag, repo_host_dir)
+        """Create/attach a container and start a fresh bash session in it.
+
+        ``host_port``/``container_port`` bind the container to the host at
+        creation (``-p host:container``) so in-sandbox dev servers are reachable
+        at ``http://localhost:host_port``; pass the project's ``ProjectSettings``
+        values. Omit both to leave the container unbound.
+        """
+        name, cwd = await self.ensure_container(
+            tag, repo_host_dir, host_port, container_port
+        )
         proc = await self._start(name, cwd)
         sess = TerminalSession(tag=tag, container=name, cwd=cwd, proc=proc)
         async with self._lock:

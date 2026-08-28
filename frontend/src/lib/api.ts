@@ -162,6 +162,37 @@ export async function deleteProject(id: string): Promise<void> {
   }
 }
 
+export interface ProjectSettings {
+  project_id: string;
+  sandbox_port: number;
+  sandbox_container_port: number;
+  rag_top_k: number;
+  rag_max_chars: number;
+  mcp_servers: Record<string, unknown>[] | null;
+  model_default: string | null;
+  updated_at: string;
+}
+
+export type ProjectSettingsInput = Omit<ProjectSettings, "project_id" | "updated_at">;
+
+export async function getProjectSettings(id: string): Promise<ProjectSettings> {
+  const res = await fetch(`${BASE}/projects/${id}/settings`, { credentials: "same-origin" });
+  return handle<ProjectSettings>(res);
+}
+
+export async function updateProjectSettings(
+  id: string,
+  body: ProjectSettingsInput,
+): Promise<ProjectSettings> {
+  const res = await fetch(`${BASE}/projects/${id}/settings`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handle<ProjectSettings>(res);
+}
+
 export async function listRepos(): Promise<Repo[]> {
   const res = await fetch(`${BASE}/repos`, { credentials: "same-origin" });
   return handle<Repo[]>(res);

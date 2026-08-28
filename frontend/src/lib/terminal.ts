@@ -10,13 +10,18 @@
  *     text    {"type":"resize","rows":N,"cols":M}
  *   server -> client:
  *     binary  raw pty output
- *     text    {"type":"ready","cwd":..,"tag":..}   after spawn
+ *     text    {"type":"ready","cwd":..,"tag":..,"host_port":..}   after spawn
  *             {"type":"error","error":..}           on spawn failure
+ *
+ * `host_port` is the host side of the sandbox `-p` bind (from the project's
+ * settings) — in-sandbox dev servers bound to the container port are reachable
+ * on the host at `http://localhost:<host_port>`.
  */
 
 export interface TerminalReady {
   cwd: string;
   tag: string;
+  host_port?: number;
 }
 
 export interface TerminalConnection {
@@ -59,9 +64,11 @@ export function connectTerminal(repoId: string): TerminalConnection {
         return; // ignore malformed control frames
       }
       if (msg.type === "ready") {
+        const hp = msg.host_port;
         readyCb?.({
           cwd: typeof msg.cwd === "string" ? msg.cwd : "",
           tag: typeof msg.tag === "string" ? msg.tag : "",
+          host_port: typeof hp === "number" && hp > 0 ? hp : undefined,
         });
       } else if (msg.type === "error") {
         errorCb?.(typeof msg.error === "string" ? msg.error : "terminal failed to start");

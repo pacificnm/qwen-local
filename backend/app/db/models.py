@@ -138,6 +138,40 @@ class Project(Base):
         back_populates="project", cascade="all, delete-orphan", lazy="selectin",
         order_by="Conversation.updated_at.desc()",
     )
+    # One-to-one per-project configuration (ports, RAG knobs, MCP servers) —
+    # see ProjectSettings. Deleting a project cascades to its settings row.
+    settings: Mapped["ProjectSettings | None"] = relationship(
+        back_populates="project", uselist=False
+    )
+
+
+class ProjectSettings(Base):
+    """Per-project configuration: sandbox ports, RAG retrieval knobs, and the
+    project's MCP server list. One row per project (unique ``project_id``),
+    so users tune each project independently through the web UI instead of
+    editing ``.env``. All numeric fields default to the spec values;
+    ``mcp_servers`` is a nullable JSON array of server configs and
+    ``model_default`` is an optional per-project model override.
+    """
+
+    __tablename__ = "project_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    sandbox_port: Mapped[int] = mapped_column(Integer, default=9000)
+    sandbox_container_port: Mapped[int] = mapped_column(Integer, default=80)
+    rag_top_k: Mapped[int] = mapped_column(Integer, default=8)
+    rag_max_chars: Mapped[int] = mapped_column(Integer, default=12000)
+    mcp_servers: Mapped[list | None] = mapped_column(JSONB)
+    model_default: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped["Project"] = relationship(back_populates="settings")
 
 
 class Conversation(Base):

@@ -28,7 +28,7 @@ from sqlalchemy.orm import joinedload
 
 from app.api.deps import get_current_user, get_db
 from app.core.settings import get_settings
-from app.db.models import Repository, User
+from app.db.models import ProjectSettings, Repository, User
 from app.db.models import Session as AppSession
 from app.db.session import db_session
 from app.repos import gitops
@@ -73,6 +73,34 @@ def _resolve_repo_host_dir(full_name: str) -> str | None:
     if clone_in_container.is_dir():
         return str(clone_in_container)
     return None
+
+
+async def _sandbox_ports(repo_id: uuid.UUID) -> tuple[int, int]:
+    """Per-project ``-p`` pair (host, container) for the terminal of ``repo_id``.
+
+    The terminal is scoped to a repo; a repo serves at most one project, so this
+    follows repo -> project -> its one-to-one settings row to read
+    ``sandbox_port`` / ``sandbox_container_port`` (the source of truth for the
+    binding — nothing is hardcoded in the manager). Falls back to the spec
+    defaults (9000 host : 80 container) when the repo is unassigned or has no
+    settings row, so a fresh project gets a reachable bind out of the box.
+    """
+    defaults: tuple[int, int] = (9000, 80)
+    async for db in db_session():
+        repo = await db.get(Repository, repo_id)
+        if repo is None or repo.project_id is None:
+            return defaults
+        row = (
+            await db.execute(
+                select(ProjectSettings).where(
+                    ProjectSettings.project_id == repo.project_id
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return defaults
+        return (row.sandbox_port or 9000, row.sandbox_container_port or 80)
+    return defaults  # pragma: no cover - db_session always yields once
 
 
 def _cookie(ws: WebSocket, name: str) -> str | None:
@@ -162,19 +190,36 @@ async def terminal_ws(repo_id: uuid.UUID, ws: WebSocket) -> None:
         return
 
     repo_host_dir = _resolve_repo_host_dir(full_name)
+    host_port, container_port = await _sandbox_ports(repo_id)
     cols = _int_q(ws, "cols", 80)
     rows = _int_q(ws, "rows", 24)
 
     manager = get_terminal_manager()
     await ws.accept()
     try:
-        sess = await manager.spawn(full_name, repo_host_dir, cols=cols, rows=rows)
+        sess = await manager.spawn(
+            full_name,
+            repo_host_dir,
+            cols=cols,
+            rows=rows,
+            host_port=host_port,
+            container_port=container_port,
+        )
     except TerminalError as exc:
         await ws.send_text(json.dumps({"type": "error", "error": str(exc)}))
         await ws.close(code=1011)
         return
 
-    await ws.send_text(json.dumps({"type": "ready", "cwd": sess.cwd, "tag": full_name}))
+    await ws.send_text(
+        json.dumps(
+            {
+                "type": "ready",
+                "cwd": sess.cwd,
+                "tag": full_name,
+                "host_port": host_port,
+            }
+        )
+    )
 
     async def to_bridge() -> None:
         try:

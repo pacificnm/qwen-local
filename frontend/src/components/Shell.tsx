@@ -7,7 +7,7 @@ import ConversationList from "./ConversationList";
 import MainPane from "./MainPane";
 import EditorPane from "./EditorPane";
 import ProjectNav from "./ProjectNav";
-import ProjectRepoCard from "./ProjectRepoCard";
+import ProjectSettings from "./ProjectSettings";
 
 const PANE_KEY = "qc.paneWidths";
 const DEFAULTS = { left: 240, right: 360 };
@@ -38,6 +38,7 @@ export default function Shell() {
   const logout = useAuth((s) => s.logout);
   const loadModels = useModels((s) => s.load);
   const loadConversations = useChat((s) => s.loadConversations);
+  const newConversation = useChat((s) => s.newConversation);
   const projects = useProjects((s) => s.projects);
   const activeId = useProjects((s) => s.activeId);
   const loadProjects = useProjects((s) => s.load);
@@ -169,13 +170,27 @@ export default function Shell() {
         }}
       >
         <nav className="pane pane-left">
-          <ProjectNav />
+          <div className="pane-left-scroll">
+            <ProjectNav />
+            {activeProject && (
+              <>
+                <div className="proj-head conv-divider">
+                  <span>{activeProject.name}</span>
+                  <button
+                    className="proj-toggle"
+                    title="New conversation"
+                    aria-label="New conversation"
+                    onClick={() => void newConversation().catch(() => undefined)}
+                  >
+                    +
+                  </button>
+                </div>
+                <ConversationList />
+              </>
+            )}
+          </div>
           {activeProject && (
-            <>
-              <div className="pane-title conv-divider">{activeProject.name}</div>
-              <ProjectRepoCard projectId={activeProject.id} />
-              <ConversationList />
-            </>
+            <ProjectSettings projectId={activeProject.id} projectName={activeProject.name} />
           )}
         </nav>
 
