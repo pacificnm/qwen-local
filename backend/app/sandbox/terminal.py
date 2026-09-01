@@ -402,8 +402,8 @@ class TerminalManager:
                     [
                         "inspect",
                         "-f",
-                        '{{index .Config.Labels "%s"}}\t'
-                        '{{range .Mounts}}{{if eq .Destination "/repo"}}1{{end}}{{end}}' % TAG_LABEL,
+                        f'{{{{index .Config.Labels "{TAG_LABEL}"}}}}\t'
+                        '{{range .Mounts}}{{if eq .Destination "/repo"}}1{{end}}{{end}}',
                         name,
                     ],
                     timeout=30,
@@ -549,6 +549,22 @@ def set_terminal_manager(manager: TerminalManager | None) -> None:
     """Test seam: override (or reset with None) the process-wide manager."""
     global _manager
     _manager = manager
+
+
+async def resolve_project_container(full_name: str) -> tuple[str, str]:
+    """Ensure (creating if needed) and return `(name, cwd)` for the repo's own
+    persistent sandbox container — the SAME `qcterm-*` container backing the
+    interactive Terminal Dock for this repo. `cwd` is `/repo` when the repo is
+    cloned, else `/workspace` (see TerminalManager.ensure_container).
+
+    The single point every model-facing docker_*/check tool goes through to
+    reach "the project's container" — none of them accept a container name
+    from the model.
+    """
+    from app.repos.sync import resolve_repo_host_dir
+
+    repo_host_dir = resolve_repo_host_dir(full_name)
+    return await get_terminal_manager().ensure_container(full_name, repo_host_dir)
 
 
 if __name__ == "__main__":  # pragma: no cover - local sanity check

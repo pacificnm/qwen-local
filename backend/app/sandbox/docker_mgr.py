@@ -196,12 +196,19 @@ class DockerManager:
         name_or_id: str,
         command: str,
         *,
+        workdir: str | None = None,
         timeout: float = EXEC_TIMEOUT,
     ) -> tuple[int, str, str]:
-        """Run a command inside a running container. Returns (rc, stdout, stderr)."""
-        rc, out, err = await self._exec(
-            ["exec", name_or_id, "sh", "-c", command], timeout=timeout
-        )
+        """Run a command inside a running container. Returns (rc, stdout, stderr).
+
+        `workdir` sets `-w` (the container has no image WORKDIR, so without
+        this every command runs at `/`, not wherever the caller expects).
+        """
+        args = ["exec"]
+        if workdir:
+            args += ["-w", workdir]
+        args += [name_or_id, "sh", "-c", command]
+        rc, out, err = await self._exec(args, timeout=timeout)
         return rc, out, err
 
     async def inspect(self, name_or_id: str) -> dict:

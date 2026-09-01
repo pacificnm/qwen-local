@@ -521,16 +521,17 @@ class RepoCommit(_RepoTool):
 # Repo quality-check tools (lint / typecheck / tests)
 # --------------------------------------------------------------------------- #
 class _CheckTool(_RepoTool):
-    """Base for tools that run a quality check against the repo working copy."""
+    """Base for tools that run a quality check inside the project's own
+    sandbox container (never the backend's own process — see checks.py)."""
 
-    #: The checks module function to call with the repo dir.
+    #: The checks module function to call with the repo's full_name.
     check_fn = None
 
     async def invoke(self, args: dict, idx: int) -> str:
         err = await self._check_repo()
         if err:
             return err
-        return await self.check_fn(self.repo_dir)
+        return await self.check_fn(self.full_name)
 
 
 class FrontendLintTool(_CheckTool):

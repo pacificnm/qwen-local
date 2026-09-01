@@ -17,6 +17,7 @@ from .terminal import (
     encode_input,
     encode_resize,
     get_terminal_manager,
+    resolve_project_container,
     set_terminal_manager,
 )
 
@@ -36,5 +37,6 @@ __all__ = [
     "get_docker_manager",
     "get_terminal_manager",
     "reset_docker_manager",
+    "resolve_project_container",
     "set_terminal_manager",
 ]

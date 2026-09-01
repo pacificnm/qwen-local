@@ -18,8 +18,13 @@ from dataclasses import dataclass
 import httpx
 
 from app.core.settings import get_settings
-from app.repos.sync import resolve_repo_host_dir
-from app.sandbox import DockerError, SandboxManager, TerminalError, get_docker_manager, get_terminal_manager
+from app.sandbox import (
+    DockerError,
+    SandboxManager,
+    TerminalError,
+    get_docker_manager,
+    resolve_project_container,
+)
 
 MAX_RESULTS = 6
 MAX_SNIPPET_CHARS = 400
@@ -209,19 +214,12 @@ async def shell(arguments: dict, ctx: ToolContext) -> str:
 # anymore (see app/agents/tools.py for the earlier, unrestricted version and
 # why it was scoped down).
 # --------------------------------------------------------------------------- #
-async def _project_container(full_name: str) -> str:
-    """Ensure (creating if needed) and return the project's own container name."""
-    repo_host_dir = resolve_repo_host_dir(full_name)
-    name, _cwd = await get_terminal_manager().ensure_container(full_name, repo_host_dir)
-    return name
-
-
 async def docker_stop(_arguments: dict, _ctx: ToolContext, *, full_name: str) -> str:
     """Stop the project's own sandbox container (recreated fresh next time
     the terminal or another tool call needs it)."""
     mgr = get_docker_manager()
     try:
-        name = await _project_container(full_name)
+        name, _cwd = await resolve_project_container(full_name)
         await mgr.stop(name)
     except (TerminalError, DockerError) as exc:
         return f"docker stop failed: {exc}"
@@ -233,7 +231,7 @@ async def docker_logs(arguments: dict, _ctx: ToolContext, *, full_name: str) -> 
     tail = int(arguments.get("tail") or 100)
     mgr = get_docker_manager()
     try:
-        name = await _project_container(full_name)
+        name, _cwd = await resolve_project_container(full_name)
         out = await mgr.logs(name, tail=tail)
     except (TerminalError, DockerError) as exc:
         return f"docker logs failed: {exc}"
@@ -252,8 +250,8 @@ async def docker_exec(arguments: dict, _ctx: ToolContext, *, full_name: str) -> 
         return "error: docker_exec requires 'command'"
     mgr = get_docker_manager()
     try:
-        name = await _project_container(full_name)
-        rc, out, err = await mgr.exec(name, command)
+        name, cwd = await resolve_project_container(full_name)
+        rc, out, err = await mgr.exec(name, command, workdir=cwd)
     except (TerminalError, DockerError) as exc:
         return f"docker exec failed: {exc}"
     parts = [f"exit code: {rc}"]
