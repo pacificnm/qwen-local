@@ -22,7 +22,7 @@ from pathlib import Path
 from qwen_agent.tools.base import BaseTool
 
 from app.core.settings import get_settings
-from app.llm.tools import ToolContext, code_interpreter, web_search
+from app.llm.tools import ToolContext, code_interpreter, shell, web_search
 from app.repos import gitops
 
 from .runtime import TurnRuntime
@@ -152,6 +152,32 @@ class CodeInterpreterTool(_AppTool):
 
     async def invoke(self, args: dict, idx: int) -> str:
         return await code_interpreter(
+            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel)
+        )
+
+
+class ShellTool(_AppTool):
+    name = "shell"
+    description = (
+        "Run a shell command (bash) in a disposable sandbox (NO network; files are "
+        "lost after the run) and get stdout/stderr back, streamed live. Use it for "
+        "git, package managers, file operations, or any CLI task. Only printed "
+        "output is visible."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "Complete shell command (one-shot, no prior context).",
+            }
+        },
+        "required": ["command"],
+    }
+    streams = True
+
+    async def invoke(self, args: dict, idx: int) -> str:
+        return await shell(
             args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel)
         )
 
@@ -419,7 +445,7 @@ class RepoCommit(_RepoTool):
 
 def build_tools(rt: TurnRuntime, repo: object | None) -> list[_AppTool]:
     """The turn's toolset; repo tools only when the conversation is bound to a repo."""
-    tools: list[_AppTool] = [WebSearchTool(rt), CodeInterpreterTool(rt)]
+    tools: list[_AppTool] = [WebSearchTool(rt), CodeInterpreterTool(rt), ShellTool(rt)]
     full_name = getattr(repo, "github_full_name", None)
     if full_name:
         tools += [

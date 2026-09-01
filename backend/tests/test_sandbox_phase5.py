@@ -89,7 +89,7 @@ class FakeDocker:
             return 0, "", ""
         raise AssertionError(f"unexpected docker args: {args}")
 
-    async def fake_start(self, name: str, code: str) -> FakeProc:
+    async def fake_start(self, name: str, code: str, command: list[str] | None = None) -> FakeProc:
         self.start_calls.append((name, code))
         return FakeProc(self)
 

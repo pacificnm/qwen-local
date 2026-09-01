@@ -160,8 +160,45 @@ async def code_interpreter(arguments: dict, ctx: ToolContext) -> str:
     return text
 
 
+async def shell(arguments: dict, ctx: ToolContext) -> str:
+    """Run a shell command in a fresh hardened sandbox; stream output live."""
+    command = str(arguments.get("command") or "").strip()
+    if not command:
+        raise ValueError("shell requires a non-empty 'command'")
+
+    mgr = get_sandbox_manager()
+    settings = get_settings()
+    await mgr.ensure_image(settings.sandbox_build_context)
+
+    async def on_output(text: str) -> None:
+        await ctx.emit("tool_output", {"index": ctx.index, "text": text})
+
+    res = await mgr.run(
+        command,
+        on_output=on_output,
+        cancel=ctx.cancel,
+        command=["bash", "-c", command],
+    )
+
+    parts = [f"exit code: {res.exit_code}"]
+    if res.timed_out:
+        parts.append(f"TIMEOUT: killed after the hard limit ({mgr.timeout_seconds}s)")
+    if res.cancelled:
+        parts.append("CANCELLED: the user pressed Stop")
+    if res.stdout:
+        parts.append("STDOUT:\n" + res.stdout)
+    if res.stderr:
+        parts.append("STDERR:\n" + res.stderr)
+    if not res.stdout and not res.stderr and not res.stdout_truncated and not res.stderr_truncated:
+        parts.append("(no output)")
+    text = "\n\n".join(parts)
+    if len(text) > MAX_TOOL_OUTPUT_CHARS:
+        text = text[:MAX_TOOL_OUTPUT_CHARS] + "\n… [result truncated]"
+    return text
+
+
 def get_tools() -> list[Tool]:
-    """The Phase 5 toolset: web search + code interpreter."""
+    """The Phase 5 toolset: web search + code interpreter + shell."""
     return [
         Tool(
             name="web_search",
@@ -199,6 +236,27 @@ def get_tools() -> list[Tool]:
                 "required": ["code"],
             },
             handler=code_interpreter,
+            streams=True,
+        ),
+        Tool(
+            name="shell",
+            description=(
+                "Run a shell command (bash) in a disposable sandbox and get "
+                "stdout/stderr back. Use it for git, package managers, file "
+                "operations, or any CLI task. There is NO network access; files "
+                "are lost after the run. Only printed output is visible."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Complete shell command (one-shot, no prior context).",
+                    }
+                },
+                "required": ["command"],
+            },
+            handler=shell,
             streams=True,
         ),
     ]

@@ -859,6 +859,12 @@ body.pane-dragging .pane-resizer::after {
   color: #ffb4b4;
 }
 
+.banner-warning {
+  background: color-mix(in srgb, #d29922 14%, var(--bg-panel));
+  border: 1px solid color-mix(in srgb, #d29922 45%, var(--border));
+  color: #ffcf87;
+}
+
 .banner button {
   flex-shrink: 0;
   padding: 0.25rem 0.6rem;

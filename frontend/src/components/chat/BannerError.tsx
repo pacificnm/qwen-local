@@ -1,19 +1,26 @@
 import { useChat } from "../../store/chat";
 
 /**
- * Error banners shown in the chat scroll area.
+ * Error + warning banners shown in the chat scroll area.
  *
- * Renders the store-level `error` (with a dismiss button) and the local
- * `streamErr` (a send/stream failure, passed in as a prop). Returns null when
- * neither is present.
+ * Renders the store-level `warning` (non-fatal, e.g. LLM call budget
+ * exhausted) and `error` (both with dismiss buttons), plus the local
+ * `streamErr` (a send/stream failure, passed in as a prop). Returns null
+ * when none are present.
  */
 export function BannerError({ streamErr }: { streamErr: string | null }) {
-  const { error, clearError } = useChat();
+  const { error, clearError, warning, clearWarning } = useChat();
 
-  if (!error && !streamErr) return null;
+  if (!error && !streamErr && !warning) return null;
 
   return (
     <>
+      {warning && (
+        <div className="banner banner-warning" role="status">
+          <span>{warning}</span>
+          <button onClick={clearWarning}>dismiss</button>
+        </div>
+      )}
       {error && (
         <div className="banner banner-error" role="alert">
           <span>{error}</span>

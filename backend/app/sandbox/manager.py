@@ -140,11 +140,13 @@ class SandboxManager:
             raise SandboxError(f"`docker {' '.join(args[:2])}` timed out after {timeout:.0f}s") from None
         return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
-    async def _start(self, name: str, code: str) -> asyncio.subprocess.Process:
+    async def _start(
+        self, name: str, code: str, command: list[str] | None = None
+    ) -> asyncio.subprocess.Process:
         """Spawn the streaming `docker run` and feed the script on stdin."""
         proc = await asyncio.create_subprocess_exec(
             self.docker_cli,
-            *self._run_args(name),
+            *self._run_args(name, command),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -175,7 +177,8 @@ class SandboxManager:
     # ------------------------------------------------------------------ #
     # run lifecycle
     # ------------------------------------------------------------------ #
-    def _run_args(self, name: str) -> list[str]:
+    def _run_args(self, name: str, command: list[str] | None = None) -> list[str]:
+        cmd = command if command is not None else ["python", "-"]
         return [
             "run",
             "-i",
@@ -194,8 +197,7 @@ class SandboxManager:
             "--user",
             self.user,
             self.image_name,
-            "python",
-            "-",
+            *cmd,
         ]
 
     async def kill(self, name: str, *, signal: str = "KILL") -> None:
@@ -216,11 +218,13 @@ class SandboxManager:
         code: str,
         on_output: OnOutput | None = None,
         cancel: asyncio.Event | None = None,
+        command: list[str] | None = None,
     ) -> RunResult:
         """Run `code` in a fresh hardened container; stream output as it lands.
 
         `on_output` receives each output line (stdout+stderr interleaved) as it
         arrives; `cancel` (set by the agent loop on Stop) kills the run.
+        `command` overrides the container entrypoint (default: `python -`).
         """
         if not (code or "").strip():
             raise SandboxError("empty script")
@@ -230,7 +234,7 @@ class SandboxManager:
         err_cap = _Capture()
         timed_out = cancelled = False
 
-        proc = await self._start(name, code)
+        proc = await self._start(name, code, command)
 
         async def pump(stream: asyncio.StreamReader | None, cap: _Capture) -> None:
             if stream is None:

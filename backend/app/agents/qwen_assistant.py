@@ -363,12 +363,32 @@ async def run_turn(
                 # same history. `last` is only the accumulated suffix
                 # (FnCallAgent never re-yields the input messages), so the
                 # fallback call must be re-anchored onto them.
-                for batch in final_answer_stream(assistant, messages + last):
+                #
+                # Retry once if the first attempt produces no visible text
+                # (e.g. a thinking-only response). If both attempts fail,
+                # emit a `warning` SSE event so the UI can inform the user.
+                got_text = False
+                for _attempt in range(2):
                     if rt.cancel.is_set() or rt.aborted:
                         raise asyncio.CancelledError()
-                    if not batch:
-                        continue
-                    rt.put(q, ("yield", list(last) + list(batch)))
+                    for batch in final_answer_stream(assistant, messages + last):
+                        if rt.cancel.is_set() or rt.aborted:
+                            raise asyncio.CancelledError()
+                        if not batch:
+                            continue
+                        if any(
+                            isinstance(_attr(m, "content"), str) and _attr(m, "content").strip()
+                            for m in batch
+                        ):
+                            got_text = True
+                        rt.put(q, ("yield", list(last) + list(batch)))
+                    if got_text:
+                        break
+                if not got_text:
+                    rt.emit_event(
+                        "warning",
+                        {"message": "Turn ended without a final answer (LLM call budget exhausted)."},
+                    )
             rt.put(q, ("done", None))
         except asyncio.CancelledError:
             rt.aborted = True

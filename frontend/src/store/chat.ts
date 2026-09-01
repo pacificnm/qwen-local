@@ -30,6 +30,8 @@ interface ChatState {
   effort: api.Effort;
   /** Last turn's prompt tokens (how much of the model's context was used). */
   contextUsed: number | null;
+  /** Non-fatal warning from the backend (e.g. LLM call budget exhausted). */
+  warning: string | null;
 
   loadConversations: (projectId: string) => Promise<void>;
   loadMore: () => Promise<void>;
@@ -43,6 +45,7 @@ interface ChatState {
   setEffort: (e: api.Effort) => void;
   cancel: () => Promise<void>;
   clearError: () => void;
+  clearWarning: () => void;
   /** Append a persisted note (e.g. a recorded PR link) to the active conversation. */
   appendMessage: (convId: string, message: api.ChatMessage) => void;
 }
@@ -79,6 +82,7 @@ export const useChat = create<ChatState>()((set, get) => ({
   error: null,
   effort: loadEffort(),
   contextUsed: null,
+  warning: null,
 
   async loadConversations(projectId) {
     const page = await api.listConversations({ project_id: projectId });
@@ -135,6 +139,7 @@ export const useChat = create<ChatState>()((set, get) => ({
       thinkingText: "",
       toolCalls: [],
       error: null,
+      warning: null,
       contextUsed: null,
     });
   },
@@ -146,6 +151,7 @@ export const useChat = create<ChatState>()((set, get) => ({
       assistantText: "",
       thinkingText: "",
       toolCalls: [],
+      warning: null,
       contextUsed: null,
     });
   },
@@ -164,6 +170,7 @@ export const useChat = create<ChatState>()((set, get) => ({
       thinkingText: "",
       toolCalls: [],
       error: null,
+      warning: null,
       contextUsed: null,
     }));
     return conv.id;
@@ -188,6 +195,7 @@ export const useChat = create<ChatState>()((set, get) => ({
             assistantText: "",
             thinkingText: "",
             toolCalls: [],
+            warning: null,
             contextUsed: null,
           }
         : {}),
@@ -276,6 +284,9 @@ export const useChat = create<ChatState>()((set, get) => ({
               });
               break;
             }
+            case "warning":
+              set({ warning: (data.message as string) ?? "warning" });
+              break;
             case "error":
               set({ phase: "error", error: (data.message as string) ?? "generation failed" });
               break;
@@ -346,6 +357,10 @@ export const useChat = create<ChatState>()((set, get) => ({
 
   clearError() {
     set({ error: null, phase: get().phase === "error" ? "idle" : get().phase });
+  },
+
+  clearWarning() {
+    set({ warning: null });
   },
 
   setEffort(e) {
