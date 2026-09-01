@@ -31,7 +31,7 @@ from app.llm.tools import (
     shell,
     web_search,
 )
-from app.repos import gitops
+from app.repos import checks, gitops
 
 from .runtime import TurnRuntime
 
@@ -517,6 +517,73 @@ class RepoCommit(_RepoTool):
         return text
 
 
+# --------------------------------------------------------------------------- #
+# Repo quality-check tools (lint / typecheck / tests)
+# --------------------------------------------------------------------------- #
+class _CheckTool(_RepoTool):
+    """Base for tools that run a quality check against the repo working copy."""
+
+    #: The checks module function to call with the repo dir.
+    check_fn = None
+
+    async def invoke(self, args: dict, idx: int) -> str:
+        err = await self._check_repo()
+        if err:
+            return err
+        return await self.check_fn(self.repo_dir)
+
+
+class FrontendLintTool(_CheckTool):
+    name = "frontend_lint"
+    description = (
+        "Run ESLint on the frontend/ directory of the linked repository. "
+        "Returns 'no problems found' or the list of lint errors with file:line."
+    )
+    parameters = {"type": "object", "properties": {}, "required": []}
+    check_fn = checks.frontend_lint
+
+
+class FrontendTypecheckTool(_CheckTool):
+    name = "frontend_typecheck"
+    description = (
+        "Run the TypeScript compiler (tsc --noEmit) on the frontend/ directory "
+        "of the linked repository. Returns 'no type errors' or the list of "
+        "type errors with file:line."
+    )
+    parameters = {"type": "object", "properties": {}, "required": []}
+    check_fn = checks.frontend_typecheck
+
+
+class BackendLintTool(_CheckTool):
+    name = "backend_lint"
+    description = (
+        "Run ruff (Python linter) on the backend/ directory of the linked "
+        "repository. Returns 'no lint errors' or the list of issues with file:line."
+    )
+    parameters = {"type": "object", "properties": {}, "required": []}
+    check_fn = checks.backend_lint
+
+
+class BackendTypecheckTool(_CheckTool):
+    name = "backend_typecheck"
+    description = (
+        "Run mypy (Python type checker) on the backend/app/ directory of the "
+        "linked repository. Returns 'no type errors' or the list of type errors."
+    )
+    parameters = {"type": "object", "properties": {}, "required": []}
+    check_fn = checks.backend_typecheck
+
+
+class BackendTestsTool(_CheckTool):
+    name = "backend_tests"
+    description = (
+        "Run the backend test suite (pytest) for the linked repository. "
+        "Returns 'all tests passed' or the first failure with a short traceback."
+    )
+    parameters = {"type": "object", "properties": {}, "required": []}
+    check_fn = checks.backend_tests
+
+
 def build_tools(rt: TurnRuntime, repo: object | None) -> list[_AppTool]:
     """The turn's toolset; repo tools only when the conversation is bound to a repo."""
     tools: list[_AppTool] = [
@@ -535,5 +602,10 @@ def build_tools(rt: TurnRuntime, repo: object | None) -> list[_AppTool]:
             RepoWriteFile(rt, full_name),
             RepoEditFile(rt, full_name),
             RepoCommit(rt, full_name),
+            FrontendLintTool(rt, full_name),
+            FrontendTypecheckTool(rt, full_name),
+            BackendLintTool(rt, full_name),
+            BackendTypecheckTool(rt, full_name),
+            BackendTestsTool(rt, full_name),
         ]
     return tools
