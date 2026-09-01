@@ -451,8 +451,8 @@ async def test_general_tools_registered_unconditionally(tmp_path, monkeypatch):
     class R:
         github_full_name = "o/r"
     tools = t.build_tools(rt, R())
-    # + docker_stop/docker_logs/docker_exec (project sandbox, repo-scoped) + 5 repo tools
-    assert len(tools) == 11 and tools[3].name == "docker_stop"
+    # + docker_stop/docker_logs/docker_exec (project sandbox, repo-scoped) + 5 repo tools + 5 check tools
+    assert len(tools) == 16 and tools[3].name == "docker_stop"
     assert tools[6].name == "repo_list_files"
 
 
