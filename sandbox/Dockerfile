@@ -30,6 +30,14 @@ RUN apt-get update \
         sudo \
     && rm -rf /var/lib/apt/lists/*
 
+# Node.js (matches frontend/Dockerfile's build stage) so frontend_lint /
+# frontend_typecheck (npx eslint / npx tsc, app/repos/checks.py) work without
+# an on-demand install on every use. checks.py still self-heals a container
+# started from an older image (installs Node the same way, at runtime).
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Writable scratch dir for the terminal profile (backed by a named volume from
 # the backend). Owned by 1000 (== the backend appuser / host clone owner) so the
 # terminal_user (default 1000:1000) can write it; HOME points here so `~`, .pip,

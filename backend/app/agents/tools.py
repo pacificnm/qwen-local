@@ -541,7 +541,7 @@ class FrontendLintTool(_CheckTool):
         "Returns 'no problems found' or the list of lint errors with file:line."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
-    check_fn = checks.frontend_lint
+    check_fn = staticmethod(checks.frontend_lint)
 
 
 class FrontendTypecheckTool(_CheckTool):
@@ -552,7 +552,7 @@ class FrontendTypecheckTool(_CheckTool):
         "type errors with file:line."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
-    check_fn = checks.frontend_typecheck
+    check_fn = staticmethod(checks.frontend_typecheck)
 
 
 class BackendLintTool(_CheckTool):
@@ -562,7 +562,7 @@ class BackendLintTool(_CheckTool):
         "repository. Returns 'no lint errors' or the list of issues with file:line."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
-    check_fn = checks.backend_lint
+    check_fn = staticmethod(checks.backend_lint)
 
 
 class BackendTypecheckTool(_CheckTool):
@@ -572,7 +572,7 @@ class BackendTypecheckTool(_CheckTool):
         "linked repository. Returns 'no type errors' or the list of type errors."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
-    check_fn = checks.backend_typecheck
+    check_fn = staticmethod(checks.backend_typecheck)
 
 
 class BackendTestsTool(_CheckTool):
@@ -582,7 +582,7 @@ class BackendTestsTool(_CheckTool):
         "Returns 'all tests passed' or the first failure with a short traceback."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
-    check_fn = checks.backend_tests
+    check_fn = staticmethod(checks.backend_tests)
 
 
 def build_tools(rt: TurnRuntime, repo: object | None) -> list[_AppTool]:

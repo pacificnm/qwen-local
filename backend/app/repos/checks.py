@@ -10,9 +10,17 @@ hold — instead of running it with the backend's own privileges (`.env`
 secrets, DB credentials, GitHub PAT, Docker socket group membership).
 
 Design notes:
-- The sandbox image ships neither Node.js nor Python dev tooling by default;
-  a missing binary surfaces as a normal shell "command not found" in the
-  captured output rather than a special-cased error.
+- The sandbox image (sandbox/Dockerfile) bakes in Node.js so the frontend
+  checks work out of the box; a container started from an older image
+  self-heals (`_ensure_npx` installs Node on demand, once, via apt) instead
+  of just failing "command not found" forever.
+- The frontend checks also self-heal `node_modules` (`_ensure_frontend_deps`,
+  `npm ci`/`npm install`) — without it, bare `npx eslint`/`npx tsc` find
+  nothing local and npx fetches an unrelated package from the registry
+  instead (most confusingly, the long-deprecated standalone `tsc` npm
+  package rather than the real TypeScript compiler inside `typescript`).
+- Python dev tooling (ruff/mypy/pytest) is NOT baked in or auto-installed —
+  a missing binary there surfaces as a normal shell "command not found".
 - All commands run with a timeout to avoid hanging the turn.
 """
 
@@ -24,6 +32,10 @@ from app.sandbox import DockerError, TerminalError, get_docker_manager, resolve_
 CHECK_TIMEOUT = 120.0
 #: pytest runs can take longer than the others.
 TEST_TIMEOUT = 180.0
+#: The one-time Node.js install (apt update + install) can be slow.
+NODE_INSTALL_TIMEOUT = 180.0
+#: `npm ci`/`npm install` on a real frontend's full dependency tree is slower still.
+NPM_INSTALL_TIMEOUT = 300.0
 
 #: Cap on returned output (chars) to keep the model context manageable.
 OUTPUT_CAP = 32 * 1024  # 32 KB
@@ -36,20 +48,95 @@ def _cap(text: str) -> str:
     return text[: OUTPUT_CAP - len(note)] + note
 
 
+async def _resolve_repo_container(full_name: str) -> tuple[str, str] | str:
+    """(name, cwd) for the project's own sandbox container, or a model-facing
+    error string if it can't be reached or the repo isn't synced there."""
+    try:
+        name, cwd = await resolve_project_container(full_name)
+    except TerminalError as exc:
+        return f"could not reach the project's sandbox container: {exc}"
+    if cwd != "/repo":
+        return "the repository has not been synced in this deployment yet — no files to check"
+    return name, cwd
+
+
 async def _run_in_project_container(
     full_name: str, subdir: str, command: str, *, timeout: float = CHECK_TIMEOUT
 ) -> tuple[int, str]:
     """Run `command` at `/repo/<subdir>` inside the project's own sandbox
     container. Returns (returncode, combined stdout+stderr)."""
-    try:
-        name, cwd = await resolve_project_container(full_name)
-    except TerminalError as exc:
-        return 1, f"could not reach the project's sandbox container: {exc}"
-    if cwd != "/repo":
-        return 1, "the repository has not been synced in this deployment yet — no files to check"
+    resolved = await _resolve_repo_container(full_name)
+    if isinstance(resolved, str):
+        return 1, resolved
+    name, cwd = resolved
     mgr = get_docker_manager()
     try:
         rc, out, err = await mgr.exec(name, command, workdir=f"{cwd}/{subdir}", timeout=timeout)
+    except DockerError as exc:
+        return 1, str(exc)
+    return rc, out + (("\n" + err) if err else "")
+
+
+async def _ensure_npx(name: str) -> str | None:
+    """Best-effort: install Node.js (npx included) if the container predates
+    the sandbox image baking it in (sandbox/Dockerfile). Returns a
+    model-facing error string on failure, else None (npx is ready)."""
+    mgr = get_docker_manager()
+    rc, _, _ = await mgr.exec(name, "command -v npx", timeout=10)
+    if rc == 0:
+        return None
+    rc, out, err = await mgr.exec(
+        name,
+        "sudo apt-get update -qq && sudo apt-get install -y -qq nodejs npm",
+        timeout=NODE_INSTALL_TIMEOUT,
+    )
+    if rc != 0:
+        return _cap(f"npx is not installed and the automatic install failed:\n{(err or out).strip()}")
+    return None
+
+
+async def _ensure_frontend_deps(name: str, cwd: str) -> str | None:
+    """Best-effort: `npm ci`/`npm install` in frontend/ if `node_modules` is
+    missing (a fresh clone never has it). Without this, `npx eslint`/`npx tsc`
+    find nothing local and npx silently fetches an UNRELATED package from the
+    registry instead — most notably the long-deprecated standalone `tsc` npm
+    package (not the TypeScript compiler, which ships inside `typescript`),
+    producing a confusing "not the tsc command you are looking for" result
+    instead of an actual typecheck. Returns a model-facing error string on
+    failure, else None (node_modules is ready)."""
+    mgr = get_docker_manager()
+    fe = f"{cwd}/frontend"
+    rc, _, _ = await mgr.exec(name, "test -d node_modules", workdir=fe, timeout=10)
+    if rc == 0:
+        return None
+    rc, out, err = await mgr.exec(
+        name,
+        "if [ -f package-lock.json ]; then npm ci; else npm install; fi",
+        workdir=fe,
+        timeout=NPM_INSTALL_TIMEOUT,
+    )
+    if rc != 0:
+        return _cap(f"npm install failed:\n{(err or out).strip()}")
+    return None
+
+
+async def _run_frontend_check(full_name: str, command: str) -> tuple[int, str]:
+    """Like `_run_in_project_container`, but installs Node.js first if `npx`
+    is missing (a container started from an older sandbox image), and the
+    frontend's own dependencies if `node_modules` is missing."""
+    resolved = await _resolve_repo_container(full_name)
+    if isinstance(resolved, str):
+        return 1, resolved
+    name, cwd = resolved
+    install_err = await _ensure_npx(name)
+    if install_err:
+        return 1, install_err
+    deps_err = await _ensure_frontend_deps(name, cwd)
+    if deps_err:
+        return 1, deps_err
+    mgr = get_docker_manager()
+    try:
+        rc, out, err = await mgr.exec(name, command, workdir=f"{cwd}/frontend", timeout=CHECK_TIMEOUT)
     except DockerError as exc:
         return 1, str(exc)
     return rc, out + (("\n" + err) if err else "")
@@ -62,7 +149,7 @@ async def _run_in_project_container(
 
 async def frontend_lint(full_name: str) -> str:
     """Run ESLint on the frontend/ directory."""
-    rc, out = await _run_in_project_container(full_name, "frontend", "npx eslint --max-warnings=0 .")
+    rc, out = await _run_frontend_check(full_name, "npx eslint --max-warnings=0 .")
     if rc == 0:
         return "eslint: no problems found ✓"
     return _cap(f"eslint exited {rc}:\n{out}")
@@ -70,7 +157,7 @@ async def frontend_lint(full_name: str) -> str:
 
 async def frontend_typecheck(full_name: str) -> str:
     """Run the TypeScript compiler (tsc --noEmit) on the frontend/ directory."""
-    rc, out = await _run_in_project_container(full_name, "frontend", "npx tsc --noEmit")
+    rc, out = await _run_frontend_check(full_name, "npx tsc --noEmit")
     if rc == 0:
         return "tsc: no type errors found ✓"
     return _cap(f"tsc exited {rc}:\n{out}")
