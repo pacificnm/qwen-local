@@ -36,6 +36,44 @@ def workspace() -> Path:
     return root / p
 
 
+def resolve_repo_host_dir(full_name: str) -> str | None:
+    """Host-side path of the repo worktree, for bind-mounting into a sandbox.
+
+    The docker daemon (on the host) resolves bind sources against HOST paths,
+    so this must return a path as seen FROM THE HOST, not the backend
+    container.
+
+    - ``workspace_host_dir`` (set in compose) is authoritative: it is the host
+      directory behind the container's workspace mount (e.g.
+      ``/data/.../workspace`` behind ``/srv/app/workspace``). That host path is
+      *not* present inside the backend container by construction, so it is
+      returned as-is with NO existence check — a container-namespace
+      ``is_dir()`` would always miss and silently fall through to the
+      in-container path below, which the host daemon cannot see (→ an empty
+      bind mount).
+    - ``workspace() / slug`` is the container view of the SAME clone (the
+      ``workspace`` dir is the bind-mount target). It IS present in-container
+      for a cloned repo, so ``.is_dir()`` on *it* is a valid "is it cloned?"
+      guard in both compose and host-local contexts.
+    - ``workspace_host_dir`` unset (host-local dev, backend and daemon share a
+      filesystem) → the in-container path IS a valid host path and is used
+      directly.
+
+    Net: a cloned repo → the host bind source (real files); an uncloned repo
+    → ``None`` so the caller falls back to a writable scratch dir instead.
+    """
+    settings = get_settings()
+    slug = full_name.replace("/", "__")
+    clone_in_container = gitops.workspace_repo_dir(workspace(), full_name)
+    if settings.workspace_host_dir:
+        if clone_in_container.is_dir():
+            return str(Path(settings.workspace_host_dir) / slug)
+        return None
+    if clone_in_container.is_dir():
+        return str(clone_in_container)
+    return None
+
+
 def _iso(t: float | None) -> str | None:
     return datetime.fromtimestamp(t, UTC).isoformat() if t is not None else None
 

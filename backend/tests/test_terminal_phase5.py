@@ -500,7 +500,7 @@ def test_authorize_eager_loads_user_for_asyncpg():
 # (b) still report "not cloned" for uncloned repos via the in-container bind
 # target, which IS present for every cloned repo.
 # --------------------------------------------------------------------------- #
-import app.api.terminals as _terminals
+import app.repos.sync as _repo_sync
 from app.core.settings import Settings as _Settings
 
 _FULL = "owner/repo"
@@ -511,30 +511,30 @@ def test_repo_host_dir_host_dir_set_clone_exists(tmp_path, monkeypatch):
     """workspace_host_dir set + clone present → the HOST bind source."""
     (tmp_path / _SLUG).mkdir(parents=True)
     host_dir = str(Path(tmp_path) / "host")
-    monkeypatch.setattr(_terminals, "get_settings", lambda: _Settings(workspace_host_dir=host_dir))
-    monkeypatch.setattr(_terminals, "workspace", lambda: tmp_path)
-    assert _terminals._resolve_repo_host_dir(_FULL) == str(Path(host_dir) / _SLUG)
+    monkeypatch.setattr(_repo_sync, "get_settings", lambda: _Settings(workspace_host_dir=host_dir))
+    monkeypatch.setattr(_repo_sync, "workspace", lambda: tmp_path)
+    assert _repo_sync.resolve_repo_host_dir(_FULL) == str(Path(host_dir) / _SLUG)
 
 
 def test_repo_host_dir_host_dir_set_clone_absent(tmp_path, monkeypatch):
     """workspace_host_dir set + NOT cloned → None (fall back to /workspace)."""
     monkeypatch.setattr(
-        _terminals, "get_settings", lambda: _Settings(workspace_host_dir=str(tmp_path / "host"))
+        _repo_sync, "get_settings", lambda: _Settings(workspace_host_dir=str(tmp_path / "host"))
     )
-    monkeypatch.setattr(_terminals, "workspace", lambda: tmp_path)
-    assert _terminals._resolve_repo_host_dir(_FULL) is None
+    monkeypatch.setattr(_repo_sync, "workspace", lambda: tmp_path)
+    assert _repo_sync.resolve_repo_host_dir(_FULL) is None
 
 
 def test_repo_host_dir_no_host_dir_clone_exists(tmp_path, monkeypatch):
     """No workspace_host_dir (host-local dev) + clone present → in-container path."""
     (tmp_path / _SLUG).mkdir(parents=True)
-    monkeypatch.setattr(_terminals, "get_settings", lambda: _Settings(workspace_host_dir=""))
-    monkeypatch.setattr(_terminals, "workspace", lambda: tmp_path)
-    assert _terminals._resolve_repo_host_dir(_FULL) == str(tmp_path / _SLUG)
+    monkeypatch.setattr(_repo_sync, "get_settings", lambda: _Settings(workspace_host_dir=""))
+    monkeypatch.setattr(_repo_sync, "workspace", lambda: tmp_path)
+    assert _repo_sync.resolve_repo_host_dir(_FULL) == str(tmp_path / _SLUG)
 
 
 def test_repo_host_dir_no_host_dir_clone_absent(tmp_path, monkeypatch):
     """No workspace_host_dir + NOT cloned → None."""
-    monkeypatch.setattr(_terminals, "get_settings", lambda: _Settings(workspace_host_dir=""))
-    monkeypatch.setattr(_terminals, "workspace", lambda: tmp_path)
-    assert _terminals._resolve_repo_host_dir(_FULL) is None
+    monkeypatch.setattr(_repo_sync, "get_settings", lambda: _Settings(workspace_host_dir=""))
+    monkeypatch.setattr(_repo_sync, "workspace", lambda: tmp_path)
+    assert _repo_sync.resolve_repo_host_dir(_FULL) is None

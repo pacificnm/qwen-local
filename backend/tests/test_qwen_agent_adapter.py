@@ -447,11 +447,13 @@ async def test_repo_commit_maps_giterrors_to_model_facing_text(tmp_path, monkeyp
 async def test_general_tools_registered_unconditionally(tmp_path, monkeypatch):
     rt, events = _runtime(tmp_path, monkeypatch, full_repo=False)
     tools = t.build_tools(rt, None)
-    assert [x.name for x in tools] == ["web_search", "code_interpreter"]
+    assert [x.name for x in tools] == ["web_search", "code_interpreter", "shell"]
     class R:
         github_full_name = "o/r"
     tools = t.build_tools(rt, R())
-    assert len(tools) == 7 and tools[2].name == "repo_list_files"
+    # + docker_stop/docker_logs/docker_exec (project sandbox, repo-scoped) + 5 repo tools
+    assert len(tools) == 11 and tools[3].name == "docker_stop"
+    assert tools[6].name == "repo_list_files"
 
 
 # --- LLM wiring: raw API + Ollama `reasoning` shim ---------------------------
@@ -503,7 +505,7 @@ async def test_build_assistant_wires_raw_llm_and_tools(monkeypatch):
     assistant = qa.build_assistant("qwen3.8:27b-longctx", t.build_tools(rt, None))
     assert type(assistant.llm) is qa.OllamaTextChat
     assert assistant.llm.use_raw_api is True
-    assert set(assistant.function_map) == {"web_search", "code_interpreter"}
+    assert set(assistant.function_map) == {"web_search", "code_interpreter", "shell"}
 
 
 # --- effort levels (UI selector → request-body params) ----------------------

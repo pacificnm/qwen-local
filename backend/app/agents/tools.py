@@ -25,11 +25,8 @@ from app.core.settings import get_settings
 from app.llm.tools import (
     ToolContext,
     code_interpreter,
-    docker_create,
     docker_exec,
-    docker_list,
     docker_logs,
-    docker_remove,
     docker_stop,
     shell,
     web_search,
@@ -194,137 +191,6 @@ class ShellTool(_AppTool):
 
 
 # --------------------------------------------------------------------------- #
-# Docker container management tools
-# --------------------------------------------------------------------------- #
-class DockerCreateTool(_AppTool):
-    name = "docker_create"
-    description = (
-        "Create and start a named Docker container. Use it to spin up dev servers, "
-        "databases, or any service container. Parameters: name (required), image "
-        "(required), command (optional, replaces default CMD), ports (list of "
-        "'host:container' strings), env (dict), volumes (list of bind mounts), "
-        "network, memory, cpus, restart policy."
-    )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "description": "Container name (unique)."},
-            "image": {"type": "string", "description": "Docker image (e.g. 'nginx:alpine')."},
-            "command": {"type": "string", "description": "Optional command to run (replaces default CMD)."},
-            "ports": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Port bindings, e.g. ['8080:80', '5432:5432'].",
-            },
-            "env": {"type": "object", "description": "Environment variables as key-value pairs."},
-            "volumes": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Bind mounts, e.g. ['/host/path:/container/path'].",
-            },
-            "network": {"type": "string", "description": "Docker network name."},
-            "memory": {"type": "string", "description": "Memory limit (e.g. '512m')."},
-            "cpus": {"type": "string", "description": "CPU limit (e.g. '1')."},
-            "restart": {"type": "string", "description": "Restart policy: no, always, on-failure."},
-        },
-        "required": ["name", "image"],
-    }
-
-    async def invoke(self, args: dict, idx: int) -> str:
-        return await docker_create(
-            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel)
-        )
-
-
-class DockerListTool(_AppTool):
-    name = "docker_list"
-    description = "List Docker containers (running by default; set all=true to include exited)."
-    parameters = {
-        "type": "object",
-        "properties": {
-            "all": {"type": "boolean", "description": "Include exited containers."},
-        },
-        "required": [],
-    }
-
-    async def invoke(self, args: dict, idx: int) -> str:
-        return await docker_list(
-            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel)
-        )
-
-
-class DockerStopTool(_AppTool):
-    name = "docker_stop"
-    description = "Stop a running Docker container (graceful SIGTERM, then SIGKILL)."
-    parameters = {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "description": "Container name or ID."},
-        },
-        "required": ["name"],
-    }
-
-    async def invoke(self, args: dict, idx: int) -> str:
-        return await docker_stop(
-            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel)
-        )
-
-
-class DockerRemoveTool(_AppTool):
-    name = "docker_remove"
-    description = "Remove a Docker container (set force=true to kill a running one first)."
-    parameters = {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "description": "Container name or ID."},
-            "force": {"type": "boolean", "description": "Force-remove (kill if running)."},
-        },
-        "required": ["name"],
-    }
-
-    async def invoke(self, args: dict, idx: int) -> str:
-        return await docker_remove(
-            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel)
-        )
-
-
-class DockerLogsTool(_AppTool):
-    name = "docker_logs"
-    description = "Get the last N lines of a container's logs (stdout+stderr)."
-    parameters = {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "description": "Container name or ID."},
-            "tail": {"type": "integer", "description": "Number of lines (default 100, max 200)."},
-        },
-        "required": ["name"],
-    }
-
-    async def invoke(self, args: dict, idx: int) -> str:
-        return await docker_logs(
-            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel)
-        )
-
-
-class DockerExecTool(_AppTool):
-    name = "docker_exec"
-    description = "Run a command inside a running container (like `docker exec`)."
-    parameters = {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "description": "Container name or ID."},
-            "command": {"type": "string", "description": "Shell command to run inside the container."},
-        },
-        "required": ["name", "command"],
-    }
-
-    async def invoke(self, args: dict, idx: int) -> str:
-        return await docker_exec(
-            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel)
-        )
-
-
-# --------------------------------------------------------------------------- #
 # Repo tools (conversation bound to a GitHub repo)
 # --------------------------------------------------------------------------- #
 class _RepoTool(_AppTool):
@@ -349,6 +215,72 @@ class _RepoTool(_AppTool):
                 "user to run a repo sync first; no file operations are possible."
             )
         return ""
+
+
+# --------------------------------------------------------------------------- #
+# The project's own sandbox container (stop / logs / exec) — the SAME
+# persistent qcterm-* container behind the Terminal Dock for this repo, never
+# an arbitrary model-supplied container name/image/volumes.
+# --------------------------------------------------------------------------- #
+class DockerStopTool(_RepoTool):
+    name = "docker_stop"
+    description = (
+        "Stop the project's own sandbox container (the one backing the Terminal "
+        "Dock). It restarts fresh — same persistent /workspace — next time the "
+        "terminal or another docker_* tool needs it. Does not affect any other "
+        "container; there is no way to target a different one."
+    )
+    parameters = {"type": "object", "properties": {}, "required": []}
+
+    async def invoke(self, args: dict, idx: int) -> str:
+        return await docker_stop(
+            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel),
+            full_name=self.full_name,
+        )
+
+
+class DockerLogsTool(_RepoTool):
+    name = "docker_logs"
+    description = (
+        "Get the last N lines of the project's own sandbox container's logs "
+        "(stdout+stderr) — the one backing the Terminal Dock."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "tail": {"type": "integer", "description": "Number of lines (default 100, max 200)."},
+        },
+        "required": [],
+    }
+
+    async def invoke(self, args: dict, idx: int) -> str:
+        return await docker_logs(
+            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel),
+            full_name=self.full_name,
+        )
+
+
+class DockerExecTool(_RepoTool):
+    name = "docker_exec"
+    description = (
+        "Run a command inside the project's own sandbox container (the one "
+        "backing the Terminal Dock) — e.g. to start a dev server, run a DB "
+        "migration, or inspect running state. Shares state with anything the "
+        "user is doing in the Terminal Dock for this project."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "Shell command to run inside the container."},
+        },
+        "required": ["command"],
+    }
+
+    async def invoke(self, args: dict, idx: int) -> str:
+        return await docker_exec(
+            args, ToolContext(emit=_async_emit(self.rt), index=idx, cancel=self.rt.cancel),
+            full_name=self.full_name,
+        )
 
 
 class RepoListFiles(_RepoTool):
@@ -591,16 +523,13 @@ def build_tools(rt: TurnRuntime, repo: object | None) -> list[_AppTool]:
         WebSearchTool(rt),
         CodeInterpreterTool(rt),
         ShellTool(rt),
-        DockerCreateTool(rt),
-        DockerListTool(rt),
-        DockerStopTool(rt),
-        DockerRemoveTool(rt),
-        DockerLogsTool(rt),
-        DockerExecTool(rt),
     ]
     full_name = getattr(repo, "github_full_name", None)
     if full_name:
         tools += [
+            DockerStopTool(rt, full_name),
+            DockerLogsTool(rt, full_name),
+            DockerExecTool(rt, full_name),
             RepoListFiles(rt, full_name),
             RepoReadFile(rt, full_name),
             RepoWriteFile(rt, full_name),

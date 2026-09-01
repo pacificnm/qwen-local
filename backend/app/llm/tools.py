@@ -18,7 +18,8 @@ from dataclasses import dataclass
 import httpx
 
 from app.core.settings import get_settings
-from app.sandbox import DockerError, SandboxManager, get_docker_manager
+from app.repos.sync import resolve_repo_host_dir
+from app.sandbox import DockerError, SandboxManager, TerminalError, get_docker_manager, get_terminal_manager
 
 MAX_RESULTS = 6
 MAX_SNIPPET_CHARS = 400
@@ -198,84 +199,43 @@ async def shell(arguments: dict, ctx: ToolContext) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# docker container management (create / list / stop / remove / logs / exec)
+# docker: the project's OWN sandbox container (stop / logs / exec)
+#
+# Scoped to the conversation's linked repo — `full_name` is server-supplied
+# (never a model argument), and resolves to the SAME persistent `qcterm-*`
+# container that backs the interactive Terminal Dock for that repo
+# (TerminalManager, app/sandbox/terminal.py). The model cannot name, create,
+# or reach any other container: there is no "any name/image/volume" tool
+# anymore (see app/agents/tools.py for the earlier, unrestricted version and
+# why it was scoped down).
 # --------------------------------------------------------------------------- #
-async def docker_create(arguments: dict, _ctx: ToolContext) -> str:
-    """Create and start a named container."""
-    name = str(arguments.get("name") or "").strip()
-    image = str(arguments.get("image") or "").strip()
-    if not name or not image:
-        return "error: docker_create requires 'name' and 'image'"
+async def _project_container(full_name: str) -> str:
+    """Ensure (creating if needed) and return the project's own container name."""
+    repo_host_dir = resolve_repo_host_dir(full_name)
+    name, _cwd = await get_terminal_manager().ensure_container(full_name, repo_host_dir)
+    return name
+
+
+async def docker_stop(_arguments: dict, _ctx: ToolContext, *, full_name: str) -> str:
+    """Stop the project's own sandbox container (recreated fresh next time
+    the terminal or another tool call needs it)."""
     mgr = get_docker_manager()
     try:
-        cid = await mgr.create(
-            name,
-            image,
-            command=arguments.get("command"),
-            ports=arguments.get("ports"),
-            env=arguments.get("env"),
-            volumes=arguments.get("volumes"),
-            network=arguments.get("network"),
-            memory=arguments.get("memory"),
-            cpus=arguments.get("cpus"),
-            restart=arguments.get("restart"),
-        )
-    except DockerError as exc:
-        return f"docker create failed: {exc}"
-    return f"container '{name}' started (id {cid[:12]})"
-
-
-async def docker_list(arguments: dict, _ctx: ToolContext) -> str:
-    """List containers (running by default)."""
-    all_containers = bool(arguments.get("all") or False)
-    mgr = get_docker_manager()
-    try:
-        containers = await mgr.list(all=all_containers)
-    except DockerError as exc:
-        return f"docker list failed: {exc}"
-    if not containers:
-        return "no containers"
-    lines = [f"{c.name}  [{c.status}]  image={c.image}" + (f"  ports={c.ports}" if c.ports else "")]
-    return "\n".join(lines)
-
-
-async def docker_stop(arguments: dict, _ctx: ToolContext) -> str:
-    """Stop a running container."""
-    name = str(arguments.get("name") or "").strip()
-    if not name:
-        return "error: docker_stop requires 'name'"
-    mgr = get_docker_manager()
-    try:
+        name = await _project_container(full_name)
         await mgr.stop(name)
-    except DockerError as exc:
+    except (TerminalError, DockerError) as exc:
         return f"docker stop failed: {exc}"
-    return f"container '{name}' stopped"
+    return f"the project's sandbox container ('{name}') was stopped"
 
 
-async def docker_remove(arguments: dict, _ctx: ToolContext) -> str:
-    """Remove a container (force=True kills a running one first)."""
-    name = str(arguments.get("name") or "").strip()
-    if not name:
-        return "error: docker_remove requires 'name'"
-    force = bool(arguments.get("force") or False)
-    mgr = get_docker_manager()
-    try:
-        await mgr.remove(name, force=force)
-    except DockerError as exc:
-        return f"docker remove failed: {exc}"
-    return f"container '{name}' removed"
-
-
-async def docker_logs(arguments: dict, _ctx: ToolContext) -> str:
-    """Get the last N lines of a container's logs."""
-    name = str(arguments.get("name") or "").strip()
-    if not name:
-        return "error: docker_logs requires 'name'"
+async def docker_logs(arguments: dict, _ctx: ToolContext, *, full_name: str) -> str:
+    """Get the last N lines of the project's sandbox container's logs."""
     tail = int(arguments.get("tail") or 100)
     mgr = get_docker_manager()
     try:
+        name = await _project_container(full_name)
         out = await mgr.logs(name, tail=tail)
-    except DockerError as exc:
+    except (TerminalError, DockerError) as exc:
         return f"docker logs failed: {exc}"
     if not out.strip():
         return "(no logs)"
@@ -285,16 +245,16 @@ async def docker_logs(arguments: dict, _ctx: ToolContext) -> str:
     return text
 
 
-async def docker_exec(arguments: dict, _ctx: ToolContext) -> str:
-    """Run a command inside a running container."""
-    name = str(arguments.get("name") or "").strip()
+async def docker_exec(arguments: dict, _ctx: ToolContext, *, full_name: str) -> str:
+    """Run a command inside the project's own sandbox container."""
     command = str(arguments.get("command") or "").strip()
-    if not name or not command:
-        return "error: docker_exec requires 'name' and 'command'"
+    if not command:
+        return "error: docker_exec requires 'command'"
     mgr = get_docker_manager()
     try:
+        name = await _project_container(full_name)
         rc, out, err = await mgr.exec(name, command)
-    except DockerError as exc:
+    except (TerminalError, DockerError) as exc:
         return f"docker exec failed: {exc}"
     parts = [f"exit code: {rc}"]
     if out:
@@ -310,7 +270,13 @@ async def docker_exec(arguments: dict, _ctx: ToolContext) -> str:
 
 
 def get_tools() -> list[Tool]:
-    """The Phase 5 toolset: web search + code interpreter + shell + docker."""
+    """The Phase 5 toolset: web search + code interpreter + shell.
+
+    (`docker_stop`/`docker_logs`/`docker_exec` are repo-scoped — they need a
+    `full_name` the generic `Handler` signature here has no slot for — so they
+    are wired directly in `app/agents/tools.py`'s repo-bound tool list, not
+    through this generic registry.)
+    """
     return [
         Tool(
             name="web_search",
@@ -370,108 +336,6 @@ def get_tools() -> list[Tool]:
             },
             handler=shell,
             streams=True,
-        ),
-        Tool(
-            name="docker_create",
-            description=(
-                "Create and start a named Docker container. Use it to spin up "
-                "dev servers, databases, or any service container. Parameters: "
-                "name (required), image (required), command (optional, replaces "
-                "default CMD), ports (list of 'host:container' strings), env "
-                "(dict), volumes (list of 'host:container' bind mounts), network, "
-                "memory, cpus, restart policy."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Container name (unique)."},
-                    "image": {"type": "string", "description": "Docker image (e.g. 'nginx:alpine')."},
-                    "command": {"type": "string", "description": "Optional command to run (replaces default CMD)."},
-                    "ports": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Port bindings, e.g. ['8080:80', '5432:5432'].",
-                    },
-                    "env": {
-                        "type": "object",
-                        "description": "Environment variables as key-value pairs.",
-                    },
-                    "volumes": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Bind mounts, e.g. ['/host/path:/container/path'].",
-                    },
-                    "network": {"type": "string", "description": "Docker network name."},
-                    "memory": {"type": "string", "description": "Memory limit (e.g. '512m')."},
-                    "cpus": {"type": "string", "description": "CPU limit (e.g. '1')."},
-                    "restart": {"type": "string", "description": "Restart policy: no, always, on-failure."},
-                },
-                "required": ["name", "image"],
-            },
-            handler=docker_create,
-        ),
-        Tool(
-            name="docker_list",
-            description="List Docker containers (running by default; set all=true to include exited).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "all": {"type": "boolean", "description": "Include exited containers."},
-                },
-                "required": [],
-            },
-            handler=docker_list,
-        ),
-        Tool(
-            name="docker_stop",
-            description="Stop a running Docker container (graceful SIGTERM, then SIGKILL).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Container name or ID."},
-                },
-                "required": ["name"],
-            },
-            handler=docker_stop,
-        ),
-        Tool(
-            name="docker_remove",
-            description="Remove a Docker container (set force=true to kill a running one first).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Container name or ID."},
-                    "force": {"type": "boolean", "description": "Force-remove (kill if running)."},
-                },
-                "required": ["name"],
-            },
-            handler=docker_remove,
-        ),
-        Tool(
-            name="docker_logs",
-            description="Get the last N lines of a container's logs (stdout+stderr).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Container name or ID."},
-                    "tail": {"type": "integer", "description": "Number of lines (default 100, max 200)."},
-                },
-                "required": ["name"],
-            },
-            handler=docker_logs,
-        ),
-        Tool(
-            name="docker_exec",
-            description="Run a command inside a running container (like `docker exec`).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Container name or ID."},
-                    "command": {"type": "string", "description": "Shell command to run inside the container."},
-                },
-                "required": ["name", "command"],
-            },
-            handler=docker_exec,
         ),
     ]
 

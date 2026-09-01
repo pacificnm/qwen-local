@@ -19,7 +19,6 @@ import asyncio
 import json
 import logging
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
@@ -31,48 +30,12 @@ from app.core.settings import get_settings
 from app.db.models import ProjectSettings, Repository, User
 from app.db.models import Session as AppSession
 from app.db.session import db_session
-from app.repos import gitops
-from app.repos.sync import workspace
+from app.repos.sync import resolve_repo_host_dir
 from app.sandbox.terminal import TerminalError, get_terminal_manager
 
 logger = logging.getLogger("qwen-chat.terminal")
 
 router = APIRouter(prefix="/api/terminals", tags=["terminals"])
-
-
-def _resolve_repo_host_dir(full_name: str) -> str | None:
-    """Host-side path of the repo worktree for the ``/repo`` bind mount.
-
-    The docker daemon (on the host) resolves bind sources against HOST paths, so
-    this must return a path as seen FROM THE HOST, not the backend container.
-
-    - ``workspace_host_dir`` (set in compose) is authoritative: it is the host
-      directory behind the container's workspace mount (e.g.
-      ``/data/.../workspace`` behind ``/srv/app/workspace``). That host path is
-      *not* present inside the backend container by construction, so it is
-      returned as-is with NO existence check — a container-namespace
-      ``is_dir()`` would always miss and silently fall through to the in-container
-      path below, which the host daemon cannot see (→ an empty ``/repo`` mount).
-    - ``workspace() / slug`` is the container view of the SAME clone (the
-      ``workspace`` dir is the bind-mount target). It IS present in-container for
-      a cloned repo, so ``.is_dir()`` on *it* is a valid "is it cloned?" guard in
-      both compose and host-local contexts.
-    - ``workspace_host_dir`` unset (host-local dev, backend and daemon share a
-      filesystem) → the in-container path IS a valid host path and is used directly.
-
-    Net: a cloned repo → the host bind source (real files at ``/repo``); an
-    uncloned repo → ``None`` so the terminal falls back to its writable ``/workspace``.
-    """
-    settings = get_settings()
-    slug = full_name.replace("/", "__")
-    clone_in_container = gitops.workspace_repo_dir(workspace(), full_name)
-    if settings.workspace_host_dir:
-        if clone_in_container.is_dir():
-            return str(Path(settings.workspace_host_dir) / slug)
-        return None
-    if clone_in_container.is_dir():
-        return str(clone_in_container)
-    return None
 
 
 async def _sandbox_ports(repo_id: uuid.UUID) -> tuple[int, int]:
@@ -189,7 +152,7 @@ async def terminal_ws(repo_id: uuid.UUID, ws: WebSocket) -> None:
         logger.warning("terminal ws auth failed: %s", exc.detail)
         return
 
-    repo_host_dir = _resolve_repo_host_dir(full_name)
+    repo_host_dir = resolve_repo_host_dir(full_name)
     host_port, container_port = await _sandbox_ports(repo_id)
     cols = _int_q(ws, "cols", 80)
     rows = _int_q(ws, "rows", 24)
@@ -305,7 +268,7 @@ async def terminal_status(
 
 
 def _default_cwd(full_name: str) -> str:
-    return "/repo" if _resolve_repo_host_dir(full_name) else "/workspace"
+    return "/repo" if resolve_repo_host_dir(full_name) else "/workspace"
 
 
 def _int_q(ws: WebSocket, key: str, default: int) -> int:
