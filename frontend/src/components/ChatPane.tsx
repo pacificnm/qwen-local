@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { EFFORT_LEVELS, type ChatMessage, type Effort, type ToolCallInfo } from "../lib/api";
+import { EFFORT_LEVELS, type ChatMessage, type Effort } from "../lib/api";
 import { onFileMention } from "../lib/fileMentionBus";
 import { useChat } from "../store/chat";
 import { useEditor } from "../store/editor";
@@ -58,72 +58,11 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 
 const markdownComponents = { pre: CodeBlock };
 
-function ToolChips({ calls }: { calls: ToolCallInfo[] }) {
-  if (calls.length === 0) return null;
-  return (
-    <div className="tool-chips">
-      {calls.map((t, i) => (
-        <span
-          key={i}
-          className={`tool-chip${t.ok === false ? " fail" : t.ok === true ? " ok" : ""}`}
-          title={t.arguments !== undefined ? JSON.stringify(t.arguments) : undefined}
-        >
-          ⚙ {t.name}
-          {t.ok !== undefined ? (t.ok ? " ✓" : " ✗") : " …"}
-          {t.duration_ms !== undefined ? ` · ${t.duration_ms} ms` : ""}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-/** Live streamed output for tools that emit `tool_output` (e.g. code_interpreter).
- *  Open while the call is running, collapsed once it finishes. */
-function ToolOutput({ calls }: { calls: ToolCallInfo[] }) {
-  const withOutput = calls.filter((t) => (t.output ?? "").length > 0);
-  if (withOutput.length === 0) return null;
-  return (
-    <div className="tool-outputs">
-      {withOutput.map((t, i) => (
-        <details key={i} className="tool-output" open={t.ok === undefined}>
-          <summary>
-            ⚙ {t.name} — output ({t.ok === false ? "failed" : t.ok === true ? "complete" : "streaming…"})
-          </summary>
-          <pre>{t.output}</pre>
-        </details>
-      ))}
-    </div>
-  );
-}
-
-function PrLinks({ calls }: { calls: ToolCallInfo[] }) {
-  const links = calls
-    .map((c) => (c.arguments as Record<string, unknown> | undefined)?.pr_url)
-    .filter((u): u is string => typeof u === "string");
-  if (links.length === 0) return null;
-  return (
-    <div className="pr-links">
-      {links.map((u) => (
-        <a key={u} href={u} target="_blank" rel="noopener noreferrer" className="pr-link">
-          {u}
-        </a>
-      ))}
-    </div>
-  );
-}
-
 function AssistantBody({ msg }: { msg: ChatMessage }) {
   const body = (msg.content ?? "").trim();
   const hasTools = msg.tool_calls && msg.tool_calls.length > 0;
   return (
     <div className="md-body">
-      {hasTools && (
-        <>
-          <ToolChips calls={msg.tool_calls!} />
-          <ToolOutput calls={msg.tool_calls!} />
-          <PrLinks calls={msg.tool_calls!} />
-        </>
-      )}
       {body ? (
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
           {msg.content}
@@ -150,7 +89,6 @@ export default function ChatPane() {
     phase,
     assistantText,
     thinkingText,
-    toolCalls,
     error,
     send,
     cancel,
@@ -180,7 +118,7 @@ export default function ChatPane() {
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, assistantText, thinkingText, toolCalls]);
+  }, [messages, assistantText, thinkingText]);
 
   useEffect(
     () => () => {
@@ -267,13 +205,6 @@ export default function ChatPane() {
             </summary>
             <pre>{thinkingText}</pre>
           </details>
-        )}
-
-        {toolCalls.length > 0 && phase !== "idle" && (
-          <>
-            <ToolChips calls={toolCalls} />
-            <ToolOutput calls={toolCalls} />
-          </>
         )}
 
         {showStreamingAssistant && (

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { GitFileEntry } from "../lib/api";
 import { useEditor } from "../store/editor";
 import { useProjects } from "../store/projects";
 import { useRepos } from "../store/repos";
@@ -141,11 +142,91 @@ function CommitForm({ repoId }: { repoId: string }) {
   );
 }
 
+function statusClass(code: string): string {
+  if (code.includes("?")) return "git-st-new";
+  if (code.includes("A")) return "git-st-add";
+  if (code.includes("D")) return "git-st-del";
+  if (code.includes("R")) return "git-st-ren";
+  return "git-st-mod";
+}
+
+function GitFileRow({
+  entry,
+  action,
+  onAction,
+  disabled,
+}: {
+  entry: GitFileEntry;
+  action: string;
+  onAction: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <li className="git-file">
+      <span className={`git-status ${statusClass(entry.status)}`}>{entry.status}</span>
+      <span
+        className="git-dpath"
+        title={entry.old_path ? `${entry.old_path} → ${entry.path}` : entry.path}
+      >
+        {entry.old_path && <span className="git-oldpath">{entry.old_path} → </span>}
+        {entry.path}
+      </span>
+      <button type="button" className="git-row-btn" disabled={disabled} onClick={onAction}>
+        {action}
+      </button>
+    </li>
+  );
+}
+
+function GitCommitBox({ repoId, stagedCount }: { repoId: string; stagedCount: number }) {
+  const gitBusy = useEditor((s) => s.gitBusy);
+  const commitStaged = useEditor((s) => s.commitStaged);
+  const [message, setMessage] = useState("");
+
+  const busy = gitBusy === "commit";
+  const disabled = !!gitBusy || stagedCount === 0 || !message.trim();
+
+  return (
+    <div className="git-section git-commit-sec">
+      <h4 className="git-sec-title">
+        Commit{stagedCount > 0 ? ` · ${stagedCount} staged` : " · nothing staged yet"}
+      </h4>
+      <textarea
+        rows={3}
+        maxLength={500}
+        placeholder="commit message — e.g. feat(chunking): tree-sitter aware splits"
+        value={message}
+        disabled={!!gitBusy}
+        onChange={(e) => setMessage(e.target.value)}
+      />
+      <div className="commit-actions">
+        <button
+          type="button"
+          className="primary"
+          disabled={disabled}
+          onClick={() =>
+            void commitStaged(repoId, message.trim()).then((ok) => {
+              if (ok) setMessage("");
+            })
+          }
+        >
+          {busy ? "Committing…" : "Commit to current branch"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function GitTab() {
   const repoId = useTabRepoId();
   const git = useEditor((s) => s.git);
   const gitLoading = useEditor((s) => s.gitLoading);
   const gitError = useEditor((s) => s.gitError);
+  const gitBusy = useEditor((s) => s.gitBusy);
+  const gitNotice = useEditor((s) => s.gitNotice);
+  const stage = useEditor((s) => s.stage);
+  const unstage = useEditor((s) => s.unstage);
+  const pushBranch = useEditor((s) => s.pushBranch);
   const commitResult = useEditor((s) => s.commitResult);
   const commitError = useEditor((s) => s.commitError);
   const repos = useRepos((s) => s.repos);
@@ -169,7 +250,13 @@ function GitTab() {
           {git && (
             <div className="git-branchline">
               <span className="git-branch">● {git.branch || "detached HEAD"}</span>
-              <code className="git-sha">{git.head_sha.slice(0, 7)}</code>
+              {git.head_sha ? (
+                <code className="git-sha">{git.head_sha.slice(0, 7)}</code>
+              ) : (
+                <span className="git-no-commits" title="The remote has no commits yet — stage files and commit below, then push.">
+                  no commits yet
+                </span>
+              )}
               {git.dirty.length > 0 ? (
                 <span className="git-dirtycount">{git.dirty.length} dirty</span>
               ) : (
@@ -190,25 +277,122 @@ function GitTab() {
       </div>
 
       {gitError && <p className="banner banner-error">{gitError}</p>}
+      {gitNotice && (
+        <div
+          className={`banner ${gitNotice.ok ? "banner-ok" : "banner-error"}`}
+          role={gitNotice.ok ? "status" : "alert"}
+        >
+          <span>{gitNotice.text}</span>
+          <button onClick={() => useEditor.getState().clearGitNotice()}>dismiss</button>
+        </div>
+      )}
       {gitLoading && !git && <p className="dim">Loading git state…</p>}
 
       {git && (
         <>
           <div className="git-section">
-            <h4 className="git-sec-title">Working tree</h4>
-            {git.dirty.length === 0 ? (
-              <p className="dim">Clean — no uncommitted changes.</p>
+            <div className="git-sec-head">
+              <h4 className="git-sec-title">Staged</h4>
+              {git.staged.length > 0 && (
+                <button
+                  type="button"
+                  className="git-sec-action"
+                  disabled={!!gitBusy}
+                  onClick={() =>
+                    void unstage(
+                      repoId,
+                      git.staged.flatMap((f) => (f.old_path ? [f.old_path, f.path] : [f.path])),
+                    )
+                  }
+                >
+                  Unstage all
+                </button>
+              )}
+            </div>
+            {git.staged.length === 0 ? (
+              <p className="dim">Nothing staged — stage files below.</p>
             ) : (
-              <ul className="git-dirty">
-                {git.dirty.map((d) => (
-                  <li key={`${d.status}:${d.path}`}>
-                    <span className="git-status">{d.status}</span>
-                    <span className="git-dpath">{d.path}</span>
-                  </li>
+              <ul className="git-files">
+                {git.staged.map((f) => (
+                  <GitFileRow
+                    key={`${f.status}:${f.path}`}
+                    entry={f}
+                    action="− Unstage"
+                    disabled={!!gitBusy}
+                    onAction={() =>
+                      void unstage(repoId, f.old_path ? [f.old_path, f.path] : [f.path])
+                    }
+                  />
                 ))}
               </ul>
             )}
           </div>
+
+          <div className="git-section">
+            <div className="git-sec-head">
+              <h4 className="git-sec-title">Changes</h4>
+              {git.changes.length > 0 && (
+                <button
+                  type="button"
+                  className="git-sec-action"
+                  disabled={!!gitBusy}
+                  onClick={() => void stage(repoId, git.changes.map((f) => f.path))}
+                >
+                  Stage all
+                </button>
+              )}
+            </div>
+            {git.changes.length === 0 ? (
+              <p className="dim">No untracked or modified files.</p>
+            ) : (
+              <ul className="git-files">
+                {git.changes.map((f) => (
+                  <GitFileRow
+                    key={`${f.status}:${f.path}`}
+                    entry={f}
+                    action="+ Stage"
+                    disabled={!!gitBusy}
+                    onAction={() => void stage(repoId, [f.path])}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <GitCommitBox repoId={repoId} stagedCount={git.staged.length} />
+
+          <div className="git-section">
+            <h4 className="git-sec-title">Push</h4>
+            <div className="git-push-row">
+              <div className="git-push-meta">
+                {git.upstream ? (
+                  <>
+                    <code className="git-upstream">{git.upstream}</code>
+                    {git.ahead != null && git.behind != null && (
+                      <span className="git-ab" title="Ahead / behind upstream (refresh to re-fetch)">
+                        {git.ahead > 0 && <span className="git-ab-ahead">↑ {git.ahead}</span>}
+                        {git.behind > 0 && <span className="git-ab-behind">↓ {git.behind}</span>}
+                        {git.ahead === 0 && git.behind === 0 && (
+                          <span className="git-ab-level">up to date</span>
+                        )}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="dim">no upstream yet — the first push sets it</span>
+                )}
+              </div>
+              <button
+                type="button"
+                className="primary git-push-btn"
+                disabled={!!gitBusy}
+                onClick={() => void pushBranch(repoId)}
+              >
+                {gitBusy === "push" ? "Pushing…" : `Push ${git.branch || "branch"}`}
+              </button>
+            </div>
+          </div>
+
           <div className="git-section">
             <h4 className="git-sec-title">Recent commits</h4>
             {git.recent.length === 0 ? (

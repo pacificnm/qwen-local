@@ -403,10 +403,21 @@ async def test_repo_state_parses_dirty_and_recent(tmp_path, monkeypatch):
             return "main\n"
         if args[1] == "rev-parse" and args[2] == "HEAD":
             return "a" * 40 + "\n"
+        if args[1] == "rev-parse" and args[2] == "--abbrev-ref":
+            return "origin/main\n"
+        if args[1] == "rev-list":
+            return "0 2\n"  # behind 0, ahead 2
         if args[1] == "status":
-            # M (staged) + space (unstaged), untracked, rename, and a
-            # malformed short line that must NOT appear in the result.
-            return "M  staged.py\n M unstaged.py\n?? brand_new.py\nR  old.py -> new.py\nab\n"
+            # MM (both sides), unstaged modify, untracked, staged rename,
+            # staged delete — plus a malformed short line to skip.
+            return (
+                "MM both.py\n"
+                " M unstaged.py\n"
+                "?? brand_new.py\n"
+                "R  old.py -> new.py\n"
+                " D dead.py\n"
+                "ab\n"
+            )
         if args[1] == "log":
             assert len(args) == 5 and args[2] == "-10", f"expected -10 cap: {args}"
             # NULs must be git's %x00 escape — a raw NUL byte truncates argv.
@@ -419,11 +430,26 @@ async def test_repo_state_parses_dirty_and_recent(tmp_path, monkeypatch):
     state = await gitops.repo_state(tmp_path / "o__r", "o/r")
     assert state["branch"] == "main"
     assert state["head_sha"] == "a" * 40
+    assert state["upstream"] == "origin/main"
+    assert state["ahead"] == 2
+    assert state["behind"] == 0
+    # "MM" appears on BOTH sides; the rename keeps its old path for unstaging.
+    assert state["staged"] == [
+        {"status": "M", "path": "both.py", "old_path": None},
+        {"status": "R", "path": "new.py", "old_path": "old.py"},
+    ]
+    assert state["changes"] == [
+        {"status": "M", "path": "both.py", "old_path": None},
+        {"status": "M", "path": "unstaged.py", "old_path": None},
+        {"status": "??", "path": "brand_new.py", "old_path": None},
+        {"status": "D", "path": "dead.py", "old_path": None},
+    ]
     assert state["dirty"] == [
-        {"status": "M", "path": "staged.py"},
+        {"status": "MM", "path": "both.py"},
         {"status": "M", "path": "unstaged.py"},
         {"status": "??", "path": "brand_new.py"},
-        {"status": "R", "path": "old.py -> new.py"},
+        {"status": "R", "path": "new.py"},
+        {"status": "D", "path": "dead.py"},
     ]
     assert len(state["recent"]) == 10  # -10 cap honoured by git itself upstream
     assert state["recent"][0] == {
@@ -437,6 +463,8 @@ async def test_repo_state_clean_tree_is_empty(tmp_path, monkeypatch):
             return "main\n"
         if args[1] == "rev-parse" and args[2] == "HEAD":
             return "b" * 40 + "\n"
+        if args[1] == "rev-parse" and args[2] == "--abbrev-ref":
+            raise GitError("no upstream configured")
         if args[1] == "status":
             return ""  # clean tree
         if args[1] == "log":
@@ -445,4 +473,300 @@ async def test_repo_state_clean_tree_is_empty(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gitops, "_run", fake_run)
     state = await gitops.repo_state(tmp_path / "o__r", "o/r")
-    assert state == {"branch": "main", "head_sha": "b" * 40, "dirty": [], "recent": []}
+    assert state == {
+        "branch": "main",
+        "has_commits": True,
+        "head_sha": "b" * 40,
+        "upstream": None,
+        "ahead": None,
+        "behind": None,
+        "staged": [],
+        "changes": [],
+        "dirty": [],
+        "recent": [],
+    }
+
+
+async def test_repo_state_unborn_head_is_graceful(tmp_path):
+    """Zero-commit repo (fresh GitHub repo not pushed yet): no 500 — empty
+    head_sha, no log, but staged files still surface for the first commit."""
+    repo = tmp_path / "o__r"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
+    (repo / "README.md").write_text("# fresh\n")
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True, capture_output=True)
+
+    state = await gitops.repo_state(repo, "o/r")
+    assert state["branch"] == "main"
+    assert state["has_commits"] is False
+    assert state["head_sha"] == ""
+    assert state["recent"] == []
+    assert state["upstream"] is None
+    assert state["staged"] == [{"status": "A", "path": "README.md", "old_path": None}]
+    assert state["dirty"] == [{"status": "A", "path": "README.md"}]
+
+
+async def test_ensure_repo_survives_empty_remote(tmp_path):
+    """Refresh of an unborn clone when the remote still has zero commits
+    (fetch HEAD fails): keep the clone, report the current branch."""
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(upstream)], check=True, capture_output=True)
+    clone = ws / "o__empty"
+    subprocess.run(["git", "clone", "-q", str(upstream), str(clone)], check=True, capture_output=True)
+
+    repo_dir, branch = await gitops.ensure_repo(ws, "o/empty", pat="")
+    assert repo_dir == clone
+    assert branch == "main"
+    # Still unborn — the failed fetch must not leave the clone broken.
+    assert (
+        subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"], capture_output=True)
+    ).returncode != 0
+
+
+async def test_commit_staged_creates_first_commit_on_unborn_head(tmp_path, monkeypatch):
+    """Git-tab 'Commit to current branch' works as the repo's FIRST commit.
+
+    Identity is pinned explicitly so the test does not depend on host git config."""
+    monkeypatch.setattr(
+        gitops, "_commit_identity",
+        lambda: {
+            "GIT_AUTHOR_NAME": "T", "GIT_COMMITTER_NAME": "T",
+            "GIT_AUTHOR_EMAIL": "t@t.co", "GIT_COMMITTER_EMAIL": "t@t.co",
+        },
+    )
+    tmp_path.joinpath("o__r").mkdir()
+    repo = tmp_path / "o__r"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
+    (repo / "README.md").write_text("# hi\n")
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True, capture_output=True)
+
+    sha = await gitops.commit_staged(repo, "o/r", "Initial commit")
+    assert len(sha) == 40
+    log = subprocess.run(
+        ["git", "-C", str(repo), "log", "-1", "--pretty=%s"], text=True, capture_output=True, check=True
+    ).stdout
+    assert log.strip() == "Initial commit"
+
+
+# --- Phase 6: stage / unstage / commit / push (real local repos) -------------
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, text=True, capture_output=True
+    ).stdout.strip()
+
+
+def _base_commit(repo: Path, name: str, content: str) -> None:
+    (repo / name).write_text(content)
+    _git(repo, "add", name)
+    _git(repo, "commit", "-q", "-m", "base")
+
+
+def _upstream_of(repo: Path, *refs: str) -> None:
+    for ref in refs:
+        # no -q: with --verify a *missing* ref exits 1 (check=True raises), an
+        # existing ref prints "sha\tref" — assert on the non-empty output.
+        assert _git(repo, "show-ref", "--verify", ref)
+
+
+def test_parse_status_splits_sides_and_renames():
+    staged, changes, dirty = gitops._parse_status(
+        "MM both.py\n"
+        "M  staged.py\n"
+        " M unstaged.py\n"
+        "?? new-dir/\n"
+        " D gone.py\n"
+        "R  old.py -> new.py\n"
+        "ab\n"
+    )
+    assert [e["path"] for e in staged] == ["both.py", "staged.py", "new.py"]
+    assert staged[2] == {"status": "R", "path": "new.py", "old_path": "old.py"}
+    assert [e["path"] for e in changes] == ["both.py", "unstaged.py", "new-dir/", "gone.py"]
+    assert [e["status"] for e in dirty] == ["MM", "M", "M", "??", "D", "R"]
+    assert len(dirty) == 6  # the short "ab" line was skipped
+
+
+async def test_stage_paths_rejects_unknown_path(tmp_path):
+    repo = tmp_path / "r"
+    _init_repo(str(repo))
+    _base_commit(repo, "a.txt", "a\n")
+    with pytest.raises(GitError):
+        await gitops.stage_paths(repo, "o/r", ["nope/missing.txt"])
+
+
+async def test_stage_unstage_roundtrip_keeps_worktree(tmp_path):
+    repo = tmp_path / "r"
+    _init_repo(str(repo))
+    _base_commit(repo, "hello.txt", "v1\n")
+    (repo / "fresh.txt").write_text("new file\n")
+    (repo / "hello.txt").write_text("v2\n")  # tracked + modified
+
+    await gitops.stage_paths(repo, "o/r", ["hello.txt", "fresh.txt"])
+    state = await gitops.repo_state(repo, "o/r")
+    assert sorted(e["path"] for e in state["staged"]) == ["fresh.txt", "hello.txt"]
+    assert state["changes"] == []
+
+    await gitops.unstage_paths(repo, "o/r", ["hello.txt", "fresh.txt"])
+    state = await gitops.repo_state(repo, "o/r")
+    assert state["staged"] == []
+    assert sorted(e["path"] for e in state["changes"]) == ["fresh.txt", "hello.txt"]
+    # Unstaging must NOT touch the worktree — file content survives.
+    assert (repo / "hello.txt").read_text() == "v2\n"
+    assert (repo / "fresh.txt").read_text() == "new file\n"
+
+
+async def test_unstage_rename_requires_both_paths(tmp_path):
+    """A staged rename is an add/remove pair in the index; resetting only the
+    new path leaves ` D old.py` staged behind (callers must send both)."""
+    repo = tmp_path / "r"
+    _init_repo(str(repo))
+    _base_commit(repo, "old.py", "x\n")
+    _git(repo, "mv", "old.py", "new.py")  # stages the rename as one entry
+
+    state = await gitops.repo_state(repo, "o/r")
+    assert state["staged"] == [{"status": "R", "path": "new.py", "old_path": "old.py"}]
+
+    # Incomplete unstage (new path only) leaves the delete staged...
+    await gitops.unstage_paths(repo, "o/r", ["new.py"])
+    assert (await gitops.repo_state(repo, "o/r"))["staged"]
+    # ...only the BOTH-paths call clears the index completely.
+    await gitops.unstage_paths(repo, "o/r", ["old.py", "new.py"])
+    state = await gitops.repo_state(repo, "o/r")
+    assert state["staged"] == []
+    assert sorted(e["path"] for e in state["changes"]) == ["new.py", "old.py"]
+
+
+async def test_commit_staged_commits_index_only(tmp_path):
+    repo = tmp_path / "r"
+    _init_repo(str(repo))
+    _base_commit(repo, "a.txt", "a\n")
+    (repo / "b.txt").write_text("b\n")
+    _git(repo, "add", "b.txt")
+    _git(repo, "commit", "-q", "-m", "two files")
+
+    (repo / "a.txt").write_text("a2\n")  # staged → committed
+    (repo / "b.txt").write_text("b2\n")  # left behind in the worktree
+
+    await gitops.stage_paths(repo, "o/r", ["a.txt"])
+    sha = await gitops.commit_staged(repo, "o/r", "stage test")
+    assert len(sha) == 40
+
+    assert _git(repo, "show", "HEAD:a.txt") == "a2"
+    assert _git(repo, "show", "HEAD:b.txt") == "b"  # the b2 edit is NOT committed
+    state = await gitops.repo_state(repo, "o/r")
+    assert state["staged"] == []
+    assert [e["path"] for e in state["changes"]] == ["b.txt"]
+
+
+async def test_commit_staged_rejects_empty_and_unstaged(tmp_path):
+    repo = tmp_path / "r"
+    _init_repo(str(repo))
+    _base_commit(repo, "a.txt", "a\n")
+
+    with pytest.raises(GitError, match="empty"):
+        await gitops.commit_staged(repo, "o/r", "   ")
+    (repo / "a.txt").write_text("a2\n")  # modified but NOT staged
+    with pytest.raises(GitError, match="nothing staged"):
+        await gitops.commit_staged(repo, "o/r", "nope")
+
+
+async def test_push_branch_new_branch_sets_upstream(tmp_path):
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    _make_upstream_with_clone(upstream, ws / "o__r")
+    clone = ws / "o__r"
+    _git(clone, "config", "user.email", "t@t.co")
+    _git(clone, "config", "user.name", "T")
+    _git(clone, "checkout", "-q", "-b", "feature")
+
+    result = await gitops.push_branch(clone, "o/r", "")
+    assert result["branch"] == "feature"
+    _upstream_of(upstream, "refs/heads/feature")
+
+    # Upstream tracking is set; local feature == origin/feature → level.
+    state = await gitops.repo_state(clone, "o/r")
+    assert state["upstream"] == "origin/feature"
+    assert state["ahead"] == 0
+    assert state["behind"] == 0
+
+    # Second push with nothing new: still succeeds (no upstream error).
+    assert (await gitops.push_branch(clone, "o/r", ""))["branch"] == "feature"
+
+
+async def test_push_branch_rejects_detached_head(tmp_path):
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    _make_upstream_with_clone(upstream, ws / "o__r")
+    clone = ws / "o__r"
+    _git(clone, "checkout", "--detach", "HEAD")
+    with pytest.raises(GitError, match="detached"):
+        await gitops.push_branch(clone, "o/r", "")
+
+
+async def test_push_branch_materializes_upstream_from_empty_remote(tmp_path):
+    """A shallow clone of a zero-commit remote (what `ensure_repo` makes) has no
+    `origin/<branch>` remote-tracking ref even after `push -u`, so `@{u}` (the
+    Git tab's upstream + ahead/behind) never resolves. `push_branch` must
+    materialize the tracking ref after a successful push. Regression pin for the
+    reactamp "no upstream yet" case."""
+    upstream = tmp_path / "upstream"
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(upstream)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{upstream}", str(clone)], check=True, capture_output=True
+    )
+    _git(clone, "config", "user.email", "t@t.co")
+    _git(clone, "config", "user.name", "T")
+
+    def ref_present() -> bool:
+        rc = subprocess.run(
+            ["git", "-C", str(clone), "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"],
+            check=False, capture_output=True,
+        ).returncode
+        return rc == 0
+
+    assert not ref_present()  # empty remote → no origin/main tracking ref yet
+
+    (clone / "README.md").write_text("# demo\n")
+    _git(clone, "add", "README.md")
+    _git(clone, "commit", "-q", "-m", "Initial commit")
+
+    assert (await gitops.push_branch(clone, "o/r", ""))["branch"] == "main"
+
+    assert ref_present()  # push_branch materialized the tracking ref
+
+    state = await gitops.repo_state(clone, "o/r")
+    assert state["upstream"] == "origin/main"
+    assert state["ahead"] == 0
+    assert state["behind"] == 0
+    assert state["has_commits"] is True
+
+
+async def test_repo_state_ahead_behind_on_real_repo(tmp_path):
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    _make_upstream_with_clone(upstream, ws / "o__r")
+    clone = ws / "o__r"
+    _git(clone, "config", "user.email", "t@t.co")
+    _git(clone, "config", "user.name", "T")
+
+    state = await gitops.repo_state(clone, "o/r")
+    assert state["upstream"] == "origin/main"
+    assert state["ahead"] == 0
+    assert state["behind"] == 0
+
+    # Local commit → ahead 1...
+    (clone / "local.txt").write_text("x\n")
+    _git(clone, "add", "local.txt")
+    _git(clone, "commit", "-q", "-m", "local ahead")
+    # ...then the upstream moves → behind 1 (diverged). The counts compare
+    # against LOCAL tracking refs, so clone must fetch the new commit.
+    (upstream / "up.txt").write_text("y\n")
+    _git(upstream, "add", "up.txt")
+    _git(upstream, "commit", "-q", "-m", "upstream moved")
+    _git(clone, "fetch", "-q", "origin")
+
+    state = await gitops.repo_state(clone, "o/r")
+    assert state["ahead"] == 1  # right side of @{u}...HEAD
+    assert state["behind"] == 1  # left side

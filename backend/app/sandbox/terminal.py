@@ -49,6 +49,10 @@ OP_RESIZE = 0x02
 
 # Terminal container name prefix (discoverable via `docker ps --filter name=qcterm-`).
 NAME_PREFIX = "qcterm-"
+# Docker label carrying the repo tag, so `reconcile()` can recover the
+# tag->container mapping from a container's name alone (the name itself is a
+# random suffix and does not encode the tag).
+TAG_LABEL = "qcterm.tag"
 # In-container bridge path (baked into the image via sandbox/Dockerfile).
 BRIDGE_PATH = "/ptymaster.py"
 # Bridge reads stdin in 64 KiB frames; cap our writes to keep chunks bounded.
@@ -310,6 +314,10 @@ class TerminalManager:
             "-d",
             "--name",
             name,
+            # Recovers tag->container mapping in `reconcile()` after an
+            # ungraceful restart wipes the in-memory `_containers` map.
+            "--label",
+            f"{TAG_LABEL}={tag}",
             f"--memory={self.memory}",
             f"--memory-swap={self.memory}",
             f"--cpus={self.cpus}",
@@ -364,6 +372,51 @@ class TerminalManager:
             cwd = "/repo" if repo_host_dir else "/workspace"
             self._containers[tag] = _Container(name=name, tag=tag, cwd=cwd)
             return name, cwd
+
+    async def reconcile(self) -> int:
+        """Adopt `qcterm-*` containers left running by an ungraceful restart.
+
+        `_containers` is purely in-memory; a crash or a hard kill (as opposed
+        to a graceful `docker compose stop`, which drains via `aclose()`)
+        skips shutdown cleanup entirely. The next process then starts with an
+        empty map, so `ensure_container` can't see the old container and
+        spins up a brand new one for the same tag — leaking the orphan
+        forever, since nothing else ever discovers or removes it by name.
+
+        Reads the `TAG_LABEL` baked in at creation (see `_create_args`) to
+        recover each container's tag, and whether it has a `/repo` mount to
+        recover `cwd`. Adopted containers get a fresh `last_active` so the
+        idle reaper still governs them going forward. Returns the number of
+        containers adopted.
+        """
+        rc, out, _ = await self._exec(
+            ["ps", "--filter", f"label={TAG_LABEL}", "--filter", "status=running", "--format", "{{.Names}}"],
+            timeout=30,
+        )
+        if rc != 0:
+            return 0
+        adopted = 0
+        async with self._lock:
+            for name in (n.strip() for n in out.splitlines() if n.strip()):
+                rc2, out2, _ = await self._exec(
+                    [
+                        "inspect",
+                        "-f",
+                        '{{index .Config.Labels "%s"}}\t'
+                        '{{range .Mounts}}{{if eq .Destination "/repo"}}1{{end}}{{end}}' % TAG_LABEL,
+                        name,
+                    ],
+                    timeout=30,
+                )
+                if rc2 != 0:
+                    continue
+                tag, _, has_repo = out2.strip("\n").partition("\t")
+                if not tag or tag in self._containers:
+                    continue
+                cwd = "/repo" if has_repo else "/workspace"
+                self._containers[tag] = _Container(name=name, tag=tag, cwd=cwd)
+                adopted += 1
+        return adopted
 
     async def spawn(
         self,

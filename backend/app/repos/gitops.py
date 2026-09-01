@@ -115,7 +115,15 @@ async def ensure_repo(workspace: Path, full_name: str, pat: str) -> tuple[Path, 
         # Refresh in place. `reset --hard` + `clean -fd` is intended: a sync
         # re-points the working copy at upstream HEAD (Phase 4 commits happen
         # on branches, not on the sync checkout).
-        await _run(["git", "fetch", "--depth", "1", "origin", "HEAD"], pat=pat, cwd=str(repo_dir))
+        try:
+            await _run(["git", "fetch", "--depth", "1", "origin", "HEAD"], pat=pat, cwd=str(repo_dir))
+        except GitError as exc:
+            if "couldn't find remote ref" not in str(exc):
+                raise
+            # Remote still has zero commits (fresh repo): keep the unborn
+            # clone as-is; the sync reports zero files and the first commit
+            # is pushed from the Git tab.
+            return repo_dir, await _current_branch(repo_dir)
         branch = await _upstream_default_branch(repo_dir) or await _current_branch(repo_dir)
         # A previous Phase 4 run may have parked the worktree on a feature
         # branch — switch back to the true default before aligning upstream.
@@ -147,34 +155,102 @@ async def head_sha(repo_dir: Path) -> str:
     return (await _run(["git", "rev-parse", "HEAD"], pat="", cwd=str(repo_dir))).strip()
 
 
-async def repo_state(repo_dir: Path, full_name: str) -> dict:
-    """Read-only git snapshot for the Git tab (branch, dirty files, recent log).
+def _parse_status(status_out: str) -> tuple[list[dict], list[dict], list[dict]]:
+    """Split `git status --porcelain` (v1) into (staged, changes, dirty).
 
-    Takes the same per-repo lock the write paths use so a commit cannot
-    land mid-snapshot. No PAT needed — everything is local.
+    `staged` = index-vs-HEAD entries; `changes` = worktree-vs-index entries
+    plus untracked. A path with staged edits AND further unstaged edits
+    appears in both lists (git's "MM"). Renames ("R  old -> new") record the
+    new path as `path` and the old as `old_path` — unstaging must reset both.
+    `dirty` (legacy field) stays the in-order union with the old status codes.
+    """
+    staged: list[dict] = []
+    changes: list[dict] = []
+    dirty: list[dict] = []
+    for line in status_out.splitlines():
+        if len(line) < 4:
+            continue
+        x, y = line[0], line[1]
+        path = line[3:]
+        old_path: str | None = None
+        if " -> " in path:  # rename/copy: "R  old.py -> new.py"
+            old_raw, _, path = path.partition(" -> ")
+            old_path = old_raw or None
+        code = (x + y).strip() or "??"
+        dirty.append({"status": code, "path": path})
+        if x == "?" or y == "?":  # untracked ("??", incl. collapsed dirs)
+            changes.append({"status": code, "path": path, "old_path": None})
+            continue
+        if x != " ":
+            staged.append({"status": x, "path": path, "old_path": old_path})
+        if y != " ":
+            changes.append({"status": y, "path": path, "old_path": None})
+    return staged, changes, dirty
+
+
+async def _upstream_and_counts(repo_dir: Path) -> tuple[str | None, int | None, int | None]:
+    """Upstream ref + (ahead, behind) counts; (None, None, None) without upstream."""
+    try:
+        upstream = (
+            await _run(["git", "rev-parse", "--abbrev-ref", "@{u}"], pat="", cwd=str(repo_dir))
+        ).strip()
+    except GitError:
+        return None, None, None
+    try:
+        counts = (
+            await _run(
+                ["git", "rev-list", "--left-right", "--count", "@{u}...HEAD"], pat="", cwd=str(repo_dir)
+            )
+        ).split()
+        return upstream, int(counts[1]), int(counts[0])
+    except (GitError, IndexError, ValueError):
+        return upstream, None, None
+
+
+async def repo_state(repo_dir: Path, full_name: str) -> dict:
+    """Read-only git snapshot for the Git tab.
+
+    Branch, upstream/ahead/behind, staged vs. changed files (for the
+    stage/commit UI), and the recent log. Takes the same per-repo lock the
+    write paths use so a commit cannot land mid-snapshot. No PAT needed —
+    everything is local.
     """
     async with _lock_for(full_name):
         branch = (await _run(["git", "branch", "--show-current"], pat="", cwd=str(repo_dir))).strip()
-        sha = await head_sha(repo_dir)
+        sha = ""
+        try:
+            sha = await head_sha(repo_dir)
+        except GitError:
+            pass  # unborn HEAD: zero commits — the first one is pending
         status = await _run(["git", "status", "--porcelain"], pat="", cwd=str(repo_dir))
-        dirty: list[dict] = []
-        for line in status.splitlines():
-            if len(line) >= 4:
-                dirty.append({"status": line[:2].strip() or "??", "path": line[3:]})
-        sep = "\x00"
-        # %x00 is git's own NUL escape — a raw NUL in argv would corrupt the
-        # format string, and git would not emit the field separators.
-        log = await _run(
-            ["git", "log", "-10", "--date=short", "--pretty=format:%h%x00%an%x00%ad%x00%s"],
-            pat="",
-            cwd=str(repo_dir),
-        )
+        staged, changes, dirty = _parse_status(status)
+        upstream, ahead, behind = await _upstream_and_counts(repo_dir)
         recent: list[dict] = []
-        for line in log.splitlines():
-            parts = line.split(sep)
-            if len(parts) == 4:
-                recent.append({"sha": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3]})
-        return {"branch": branch, "head_sha": sha, "dirty": dirty, "recent": recent}
+        if sha:
+            sep = "\x00"
+            # %x00 is git's own NUL escape — a raw NUL in argv would corrupt
+            # the format string, and git would not emit the field separators.
+            log = await _run(
+                ["git", "log", "-10", "--date=short", "--pretty=format:%h%x00%an%x00%ad%x00%s"],
+                pat="",
+                cwd=str(repo_dir),
+            )
+            for line in log.splitlines():
+                parts = line.split(sep)
+                if len(parts) == 4:
+                    recent.append({"sha": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3]})
+        return {
+            "branch": branch,
+            "has_commits": bool(sha),
+            "head_sha": sha,
+            "upstream": upstream,
+            "ahead": ahead,
+            "behind": behind,
+            "staged": staged,
+            "changes": changes,
+            "dirty": dirty,
+            "recent": recent,
+        }
 
 
 def remove_repo(workspace: Path, full_name: str) -> None:
@@ -481,3 +557,111 @@ async def commit_workspace(
             await _run(["git", "checkout", "-f", default_branch], pat=pat, cwd=str(repo_dir))
 
     return CommitResult(branch=name, commit_sha=sha, pr_url=pr_url)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: Git tab — stage / unstage / commit / push on the current branch
+# ---------------------------------------------------------------------------
+
+
+def _validated_paths(repo_dir: Path, paths: list[str]) -> None:
+    if not paths:
+        raise GitError("no file paths given")
+    for p in paths:
+        resolve_safe(repo_dir, p)
+
+
+async def stage_paths(repo_dir: Path, full_name: str, paths: list[str]) -> int:
+    """`git add -- <paths>`: stage entries onto the index. Returns the count."""
+    async with _lock_for(full_name):
+        _validated_paths(repo_dir, paths)
+        await _run(["git", "add", "--", *paths], pat="", cwd=str(repo_dir))
+    return len(paths)
+
+
+async def unstage_paths(repo_dir: Path, full_name: str, paths: list[str]) -> int:
+    """`git reset -- <paths>` (mixed): move staged entries back to the worktree side.
+
+    Rename entries carry an add/remove pair in the index, so callers must pass
+    BOTH the old and new path to fully unstage a rename (see GitTab: staged
+    rename rows send `old_path` + `path`).
+    """
+    async with _lock_for(full_name):
+        _validated_paths(repo_dir, paths)
+        await _run(["git", "reset", "-q", "--", *paths], pat="", cwd=str(repo_dir))
+    return len(paths)
+
+
+async def commit_staged(repo_dir: Path, full_name: str, message: str) -> str:
+    """Commit the current index (staged entries only) on the checked-out branch.
+
+    Returns the new HEAD sha. Raises GitError for an empty message or a clean
+    index. The worktree is never touched (`git commit` with no pathspec).
+    """
+    if not message.strip():
+        raise GitError("commit message must not be empty")
+    async with _lock_for(full_name):
+        status = await _run(["git", "status", "--porcelain"], pat="", cwd=str(repo_dir))
+        staged, _changes, _dirty = _parse_status(status)
+        if not staged:
+            raise GitError("nothing staged to commit — stage files first")
+        await _run(
+            ["git", "commit", "-m", message],
+            pat="",
+            cwd=str(repo_dir),
+            env_extra=_commit_identity(),
+        )
+        return (await _run(["git", "rev-parse", "HEAD"], pat="", cwd=str(repo_dir))).strip()
+
+
+async def _ensure_tracking_ref(repo_dir: Path, pat: str, branch: str, head: str) -> None:
+    """Make `@{u}` resolve for `branch` after a push.
+
+    A shallow clone of a *zero-commit* remote (what `ensure_repo` makes) is
+    missing the plumbing git normally writes at clone time: it has neither a
+    `remote.origin.fetch` refspec nor an `origin/<branch>` remote-tracking ref.
+    `push -u` records `branch.<b>.remote`/`merge` but fixes neither — and `@{u}`
+    resolves `branch.<b>.merge` *through* the `remote.<r>.fetch` refspec, so the
+    Git tab's upstream + ahead/behind stay `null` until both are in place.
+    """
+    # 1) Install the standard fetch refspec if the clone never got one.
+    try:
+        await _run(["git", "config", "--get", "remote.origin.fetch"], pat=pat, cwd=str(repo_dir))
+    except GitError:
+        await _run(
+            ["git", "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            pat=pat,
+            cwd=str(repo_dir),
+        )
+    # 2) Materialize the remote-tracking ref at the commit we just pushed.
+    await _run(["git", "update-ref", f"refs/remotes/origin/{branch}", head], pat=pat, cwd=str(repo_dir))
+
+
+async def push_branch(repo_dir: Path, full_name: str, pat: str) -> dict:
+    """Push the checked-out branch to `origin/<branch>`, setting upstream if unset.
+
+    An explicit refspec is ALWAYS used: a bare `git push` under
+    push.default=simple can target a stale upstream ref (a branch created
+    from `main` may keep `origin/main` as upstream and push onto main).
+    The origin URL already embeds the PAT from clone time; `pat` only scrubs
+    tokens out of error messages.
+    """
+    async with _lock_for(full_name):
+        try:
+            branch = (
+                await _run(["git", "symbolic-ref", "--short", "HEAD"], pat=pat, cwd=str(repo_dir))
+            ).strip()
+        except GitError:
+            raise GitError("HEAD is detached — check out a branch before pushing")
+        if not branch:
+            raise GitError("no branch is checked out — check out a branch before pushing")
+        out = await _run(["git", "push", "-u", "origin", branch], pat=pat, cwd=str(repo_dir))
+        # Repair the tracking plumbing for empty-remote clones (see the helper).
+        # Best-effort: a failure here must not sink a push that already landed.
+        try:
+            head = (await _run(["git", "rev-parse", "HEAD"], pat="", cwd=str(repo_dir))).strip()
+            if head:
+                await _ensure_tracking_ref(repo_dir, pat, branch, head)
+        except GitError:
+            pass
+    return {"branch": branch, "output": out.strip()}

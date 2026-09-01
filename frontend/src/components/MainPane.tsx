@@ -2,7 +2,8 @@ import { DiffEditor, Editor } from "@monaco-editor/react";
 import "../lib/monaco";
 import ChatPane from "./ChatPane";
 import TerminalDock from "./TerminalDock";
-import { useEditor, type EditorTab } from "../store/editor";
+import ToolCallsPane from "./ToolCallsPane";
+import { TOOL_CALLS_TAB_ID, useEditor, type EditorTab } from "../store/editor";
 
 /** One editor tab's body: head (path + view toggle) + Monaco + commit hint. */
 function EditorBody({ tab }: { tab: EditorTab }) {
@@ -83,6 +84,7 @@ export default function MainPane() {
   const activeId = useEditor((s) => s.activeTabId);
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const chatActive = activeId === null;
+  const toolCallsActive = activeId === TOOL_CALLS_TAB_ID;
 
   return (
     <main className="pane pane-center mainpane">
@@ -97,6 +99,17 @@ export default function MainPane() {
           title="Chat (fixed)"
         >
           ✦ Chat
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={toolCallsActive}
+          aria-controls="mainpane-tabs"
+          className={toolCallsActive ? "maintab active" : "maintab"}
+          onClick={() => useEditor.getState().focusToolCalls()}
+          title="Tool Calls (fixed)"
+        >
+          ⚙ Tool Calls
         </button>
         {tabs.map((t) => {
           const active = t.id === activeId;
@@ -140,6 +153,12 @@ export default function MainPane() {
           aria-hidden={!chatActive}
         >
           <ChatPane />
+        </section>
+        <section
+          className={toolCallsActive ? "tabpane chatpane" : "tabpane chatpane hidden"}
+          aria-hidden={!toolCallsActive}
+        >
+          <ToolCallsPane />
         </section>
         {activeTab && (
           <section className="tabpane" key={activeTab.id} aria-hidden={false}>

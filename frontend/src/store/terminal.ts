@@ -19,9 +19,6 @@ interface TermUI {
   setOpen: (open: boolean) => void;
   status: TermStatus;
   setStatus: (status: TermStatus) => void;
-  /** Active project's repo full name, shown next to the launcher icon. */
-  repoName: string;
-  setRepoName: (repoName: string) => void;
 }
 
 export const useTerminalUI = create<TermUI>()((set) => ({
@@ -37,6 +34,4 @@ export const useTerminalUI = create<TermUI>()((set) => ({
   },
   status: "idle",
   setStatus: (status) => set({ status }),
-  repoName: "",
-  setRepoName: (repoName) => set({ repoName }),
 }));

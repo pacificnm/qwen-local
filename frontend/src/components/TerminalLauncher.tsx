@@ -8,13 +8,12 @@ const STATE_LABEL: Record<TermStatus, string> = {
   closed: "closed",
 };
 
-/** Bottom-left terminal launcher: icon + repo name + live status. Click to
+/** Bottom-left terminal launcher: icon + live status. Click to
  *  open/close the shell (rendered in the center pane by `TerminalDock`). */
 export default function TerminalLauncher() {
   const open = useTerminalUI((s) => s.open);
   const setOpen = useTerminalUI((s) => s.setOpen);
   const status = useTerminalUI((s) => s.status);
-  const repoName = useTerminalUI((s) => s.repoName);
 
   return (
     <button
@@ -28,11 +27,6 @@ export default function TerminalLauncher() {
       <span className="term-launch-ico" aria-hidden>
         ▣
       </span>
-      {repoName && (
-        <span className="term-launch-repo" title={repoName}>
-          {repoName}
-        </span>
-      )}
       <span className={`term-launch-status tdock-status tdock-status--${status}`}>
         {STATE_LABEL[status]}
       </span>

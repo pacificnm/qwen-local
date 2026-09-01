@@ -289,6 +289,12 @@ export interface GitDirtyEntry {
   path: string;
 }
 
+export interface GitFileEntry {
+  status: string;
+  path: string;
+  old_path: string | null;
+}
+
 export interface GitLogEntry {
   sha: string;
   author: string;
@@ -299,7 +305,13 @@ export interface GitLogEntry {
 export interface GitState {
   repo_id: string;
   branch: string;
+  has_commits: boolean;
   head_sha: string;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+  staged: GitFileEntry[];
+  changes: GitFileEntry[];
   dirty: GitDirtyEntry[];
   recent: GitLogEntry[];
 }
@@ -307,6 +319,45 @@ export interface GitState {
 export async function getRepoGit(repoId: string): Promise<GitState> {
   const res = await fetch(`${BASE}/repos/${repoId}/git`, { credentials: "same-origin" });
   return handle<GitState>(res);
+}
+
+export async function stageFiles(repoId: string, paths: string[]): Promise<{ staged: number }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git/stage`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  });
+  return handle<{ staged: number }>(res);
+}
+
+export async function unstageFiles(repoId: string, paths: string[]): Promise<{ unstaged: number }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git/unstage`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  });
+  return handle<{ unstaged: number }>(res);
+}
+
+export async function commitStaged(repoId: string, message: string): Promise<{ commit_sha: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git/commit`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  return handle<{ commit_sha: string }>(res);
+}
+
+export async function pushBranch(repoId: string): Promise<{ branch: string; output: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git/push`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+  });
+  return handle<{ branch: string; output: string }>(res);
 }
 
 export interface CommitBody {

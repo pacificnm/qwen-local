@@ -3,6 +3,9 @@ import * as api from "../lib/api";
 import { detectLanguage } from "../lib/monaco";
 import { useChat } from "./chat";
 
+/** Sentinel `activeTabId` for the fixed, non-closable Tool Calls tab (never a real tab's id). */
+export const TOOL_CALLS_TAB_ID = "__tool-calls__";
+
 /** One tab in the main (center) pane: a repo file or a chat snippet. */
 export interface EditorTab {
   id: string;
@@ -23,9 +26,10 @@ export interface EditorTab {
 interface EditorState {
   /** Editor tabs open in the main pane. */
   editorTabs: EditorTab[];
-  /** Focused main-pane tab; null = the fixed Chat tab. */
+  /** Focused main-pane tab; null = the fixed Chat tab, TOOL_CALLS_TAB_ID = the fixed Tool Calls tab. */
   activeTabId: string | null;
   focusChat: () => void;
+  focusToolCalls: () => void;
   focusTab: (id: string) => void;
   openFile: (repoId: string, path: string) => Promise<void>;
   openSnippet: (content: string, languageHint: string) => void;
@@ -44,12 +48,20 @@ interface EditorState {
   treeError: string | null;
   loadTree: (repoId: string) => Promise<void>;
 
-  /** Git-tab snapshot (branch, dirty entries, recent log). */
+  /** Git-tab snapshot (branch, staged/changed files, upstream counts, recent log). */
   gitRepoId: string | null;
   git: api.GitState | null;
   gitLoading: boolean;
   gitError: string | null;
   loadGit: (repoId: string) => Promise<void>;
+  /** Git-tab action in flight: "stage" | "unstage" | "commit" | "push" | null. */
+  gitBusy: string | null;
+  gitNotice: { ok: boolean; text: string } | null;
+  clearGitNotice: () => void;
+  stage: (repoId: string, paths: string[]) => Promise<boolean>;
+  unstage: (repoId: string, paths: string[]) => Promise<boolean>;
+  commitStaged: (repoId: string, message: string) => Promise<boolean>;
+  pushBranch: (repoId: string) => Promise<boolean>;
 
   committing: boolean;
   commitError: string | null;
@@ -86,6 +98,10 @@ export const useEditor = create<EditorState>()((set, get) => ({
 
   focusChat() {
     set({ activeTabId: null });
+  },
+
+  focusToolCalls() {
+    set({ activeTabId: TOOL_CALLS_TAB_ID });
   },
 
   focusTab(id) {
@@ -193,6 +209,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
   git: null,
   gitLoading: false,
   gitError: null,
+  gitBusy: null,
+  gitNotice: null,
   committing: false,
   commitError: null,
   commitResult: null,
@@ -230,9 +248,69 @@ export const useEditor = create<EditorState>()((set, get) => ({
       git: null,
       gitLoading: false,
       gitError: null,
+      gitBusy: null,
+      gitNotice: null,
       commitError: null,
       commitResult: null,
     });
+  },
+
+  clearGitNotice: () => set({ gitNotice: null }),
+
+  async stage(repoId, paths) {
+    if (get().gitBusy) return false;
+    set({ gitBusy: "stage", gitNotice: null });
+    try {
+      await api.stageFiles(repoId, paths);
+      await get().loadGit(repoId);
+      set({ gitNotice: { ok: true, text: `Staged ${paths.length} file${paths.length === 1 ? "" : "s"}.` }, gitBusy: null });
+      return true;
+    } catch (e) {
+      set({ gitNotice: { ok: false, text: `Stage failed: ${errMsg(e)}` }, gitBusy: null });
+      return false;
+    }
+  },
+
+  async unstage(repoId, paths) {
+    if (get().gitBusy) return false;
+    set({ gitBusy: "unstage", gitNotice: null });
+    try {
+      await api.unstageFiles(repoId, paths);
+      await get().loadGit(repoId);
+      set({ gitNotice: { ok: true, text: `Unstaged ${paths.length} file${paths.length === 1 ? "" : "s"}.` }, gitBusy: null });
+      return true;
+    } catch (e) {
+      set({ gitNotice: { ok: false, text: `Unstage failed: ${errMsg(e)}` }, gitBusy: null });
+      return false;
+    }
+  },
+
+  async commitStaged(repoId, message) {
+    if (get().gitBusy) return false;
+    set({ gitBusy: "commit", gitNotice: null });
+    try {
+      const { commit_sha } = await api.commitStaged(repoId, message);
+      await get().loadGit(repoId);
+      set({ gitNotice: { ok: true, text: `Committed ${commit_sha.slice(0, 8)} on ${get().git?.branch ?? "the current branch"}.` }, gitBusy: null });
+      return true;
+    } catch (e) {
+      set({ gitNotice: { ok: false, text: `Commit failed: ${errMsg(e)}` }, gitBusy: null });
+      return false;
+    }
+  },
+
+  async pushBranch(repoId) {
+    if (get().gitBusy) return false;
+    set({ gitBusy: "push", gitNotice: null });
+    try {
+      const { branch } = await api.pushBranch(repoId);
+      await get().loadGit(repoId);
+      set({ gitNotice: { ok: true, text: `Pushed ${branch} to origin.` }, gitBusy: null });
+      return true;
+    } catch (e) {
+      set({ gitNotice: { ok: false, text: `Push failed: ${errMsg(e)}` }, gitBusy: null });
+      return false;
+    }
   },
 
   async commit(args) {

@@ -32,6 +32,12 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _start_terminal_reaper() -> None:
+        try:
+            adopted = await get_terminal_manager().reconcile()
+            if adopted:
+                logger.info("adopted %d orphaned terminal container(s)", adopted)
+        except Exception:  # noqa: BLE001 - a bad reconcile must not block startup
+            logger.exception("terminal reconcile failed")
         app.state.terminal_reaper = asyncio.create_task(_terminal_reaper_loop())
 
     @app.on_event("shutdown")

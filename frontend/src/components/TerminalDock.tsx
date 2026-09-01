@@ -29,15 +29,12 @@ function persist(key: string, value: string) {
   }
 }
 
-/** Bottom of the center MainPane: the live xterm shell. The launch toggle,
- *  repo name, and status badge live in the bottom-left footer (see
- *  `useTerminalUI`); there is no header bar. Renders nothing while closed. */
+/** Bottom of the center MainPane: the live xterm shell. The launch toggle
+ *  and status badge live in the bottom-left footer (see `useTerminalUI`);
+ *  there is no header bar. Renders nothing while closed. */
 export default function TerminalDock() {
   const repoId = useProjects((s) => s.projects.find((p) => p.id === s.activeId)?.repo?.id ?? null);
-  const repoName = useProjects(
-    (s) => s.projects.find((p) => p.id === s.activeId)?.repo?.github_full_name ?? null,
-  );
-  const { open, setStatus, setRepoName } = useTerminalUI();
+  const { open, setStatus } = useTerminalUI();
 
   const [height, setHeight] = useState<number>(() => loadHeight());
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -48,11 +45,6 @@ export default function TerminalDock() {
   const fitRef = useRef<FitAddon | null>(null);
   const connRef = useRef<TerminalConnection | null>(null);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
-
-  // Publish the repo name so the bottom-left launcher icon can show it.
-  useEffect(() => {
-    setRepoName(repoName ?? "");
-  }, [repoName, setRepoName]);
 
   // Terminal + WebSocket lifecycle: (re)create when opened / repo changes / retry nonce.
   useEffect(() => {

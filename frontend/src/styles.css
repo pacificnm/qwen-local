@@ -1581,6 +1581,17 @@ body.pane-dragging .pane-resizer::after {
   padding: 0.12rem 0.5rem;
 }
 
+/* Zero-commit repo (fresh GitHub repo not pushed yet): no sha exists. */
+.git-no-commits {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-style: italic;
+  color: var(--text-dim);
+  border: 1px dashed color-mix(in srgb, var(--text-dim) 45%, transparent);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+
 .git-sec-title {
   margin: 0 0 0.35rem;
   font-size: 0.72rem;
@@ -1679,6 +1690,182 @@ body.pane-dragging .pane-resizer::after {
   border-radius: 10px;
   padding: 0.7rem 0.75rem 0.8rem;
   background: var(--bg-panel);
+}
+
+/* --- Git tab: file rows, stage/unstage, commit box, push --- */
+
+.git-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.git-sec-head .git-sec-title {
+  margin: 0;
+}
+
+.git-sec-action {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 6px;
+  padding: 0.16rem 0.55rem;
+  white-space: nowrap;
+}
+
+.git-sec-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--accent);
+}
+
+.git-files {
+  list-style: none;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  padding: 0.35rem 0.5rem;
+}
+
+.git-file {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  min-width: 0;
+}
+
+.git-file .git-dpath {
+  flex: 1;
+}
+
+.git-oldpath {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.git-row-btn {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.16rem 0.5rem;
+  white-space: nowrap;
+}
+
+.git-row-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.git-status.git-st-add {
+  color: #9fe8bd;
+}
+
+.git-status.git-st-del {
+  color: #ff8b8e;
+}
+
+.git-status.git-st-ren {
+  color: #96c5ff;
+}
+
+.git-status.git-st-new {
+  color: #ffcf87;
+}
+
+.git-status.git-st-mod {
+  color: var(--accent);
+}
+
+.git-commit-sec textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  resize: vertical;
+  min-height: 3.2rem;
+}
+
+.git-commit-sec textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.git-commit-sec .commit-actions {
+  margin-top: 0.5rem;
+}
+
+.git-push-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  padding: 0.45rem 0.6rem;
+}
+
+.git-push-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.git-upstream {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.1rem 0.35rem;
+}
+
+.git-ab {
+  display: inline-flex;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.git-ab-ahead {
+  color: #9fe8bd;
+  background: color-mix(in srgb, #2fbf71 14%, transparent);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+}
+
+.git-ab-behind {
+  color: #ffcf87;
+  background: color-mix(in srgb, #ffb020 16%, transparent);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+}
+
+.git-ab-level {
+  color: var(--text-dim);
+}
+
+.git-push-btn {
+  flex-shrink: 0;
+  padding: 0.4rem 0.9rem;
 }
 
 /* --- Main pane: fixed Chat tab + file tabs --- */
@@ -1932,7 +2119,7 @@ span.maintab.active {
   background: var(--bg-elev);
 }
 
-/* Terminal launcher (icon + repo + status), pushed to the left of the footer. */
+/* Terminal launcher (icon + status), pushed to the left of the footer. */
 .pane-left-foot .term-launch {
   margin-right: auto;
   display: inline-flex;
@@ -1959,15 +2146,6 @@ span.maintab.active {
   flex: none;
   color: var(--accent);
   font-size: 0.9rem;
-}
-.pane-left-foot .term-launch-repo {
-  flex: none;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-  color: var(--text-dim);
 }
 .pane-left-foot .term-launch .tdock-status {
   flex: none;

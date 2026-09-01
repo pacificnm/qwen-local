@@ -128,8 +128,24 @@ async def _run(job: SyncJob) -> None:
 
         # 3) Scan the tree and diff against the last sync (by blob sha).
         job.stage = "scanning"
+        try:
+            head = await gitops.head_sha(repo_dir)
+        except gitops.GitError:
+            head = None  # unborn HEAD: zero commits — nothing to ingest yet
+        if head is None:
+            # Fresh empty repo: finish cleanly (no scary error state) so the
+            # repo stays usable — the first commit is pushed from the Git tab,
+            # and the next sync picks it up.
+            async with factory() as db:
+                repo = await db.get(Repository, job.repo_id)
+                if repo is not None:
+                    repo.last_synced_at = datetime.now(UTC)
+                    if branch != "HEAD":
+                        repo.default_branch = branch
+                await db.commit()
+            job.stage = "done"
+            return
         tree = await gitops.list_tree(repo_dir)
-        head = await gitops.head_sha(repo_dir)
         new_map = {f.path: f.blob_sha for f in tree}
 
         async with factory() as db:

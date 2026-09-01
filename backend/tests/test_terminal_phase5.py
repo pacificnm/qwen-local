@@ -88,6 +88,9 @@ class FakeTerminalDocker:
         self.rm_calls: list[str] = []
         self.running: set[str] = set()
         self.last_proc: FakeLiveProc | None = None
+        # name -> qcterm.tag label value; name -> has a /repo mount.
+        self.labels: dict[str, str] = {}
+        self.repo_mounted: set[str] = set()
 
     async def fake_exec(
         self, args: list[str], *, input_bytes: bytes | None = None, timeout: float = 60.0
@@ -105,12 +108,26 @@ class FakeTerminalDocker:
                 return 1, "", "no such image\n"
             name = args[args.index("--name") + 1]
             self.running.add(name)
+            if "--label" in args:
+                label = args[args.index("--label") + 1]
+                _, _, tag = label.partition("=")
+                self.labels[name] = tag
+            if "/repo" in args:
+                self.repo_mounted.add(name)
             return 0, "containerid\n", ""
-        if verb == "inspect":  # inspect -f {{.State.Running}} <name>
+        if verb == "ps":  # ps --filter label=qcterm.tag --filter status=running --format {{.Names}}
+            names = [n for n in self.labels if n in self.running]
+            return 0, "\n".join(names), ""
+        if verb == "inspect" and "-f" in args and "State.Running" in args[args.index("-f") + 1]:
             name = args[-1]
             if name in self.running:
                 return 0, "true\n", ""
             return 1, "", "no such container\n"
+        if verb == "inspect":  # inspect -f <label>\t<repo-mount> <name>  (reconcile)
+            name = args[-1]
+            tag = self.labels.get(name, "")
+            has_repo = "1" if name in self.repo_mounted else ""
+            return 0, f"{tag}\t{has_repo}", ""
         if verb == "rm":
             name = args[-1]
             self.rm_calls.append(name)
@@ -310,6 +327,61 @@ def test_ensure_container_reuses_running_session():
     runs = [a for a in fd.exec_calls if a[0] == "run"]
     assert len(runs) == 1
     assert second_name == first_name
+
+
+def test_reconcile_adopts_orphaned_labeled_container():
+    # Simulate a container left running by a prior (now-dead) process: it
+    # exists in the fake daemon but no manager has ever tracked it in-memory.
+    fd = FakeTerminalDocker()
+    fd.running.add("qcterm-orphan1")
+    fd.labels["qcterm-orphan1"] = TAG
+
+    mgr = make_manager(fd)
+    adopted = _sync(mgr.reconcile())
+
+    assert adopted == 1
+    tracked = mgr.tracked()[TAG]
+    assert tracked.name == "qcterm-orphan1"
+    assert tracked.cwd == "/workspace"  # no /repo mount recorded
+
+
+def test_reconcile_recovers_repo_cwd_from_mount():
+    fd = FakeTerminalDocker()
+    fd.running.add("qcterm-orphan2")
+    fd.labels["qcterm-orphan2"] = TAG
+    fd.repo_mounted.add("qcterm-orphan2")
+
+    mgr = make_manager(fd)
+    _sync(mgr.reconcile())
+
+    assert mgr.tracked()[TAG].cwd == "/repo"
+
+
+def test_reconcile_skips_tags_already_tracked():
+    fd = FakeTerminalDocker()
+    mgr = make_manager(fd)
+    live_name, _cwd = _sync(mgr.ensure_container(TAG))
+
+    # An orphan sharing the same tag must not clobber the live entry.
+    fd.running.add("qcterm-orphan3")
+    fd.labels["qcterm-orphan3"] = TAG
+    adopted = _sync(mgr.reconcile())
+
+    assert adopted == 0
+    assert mgr.tracked()[TAG].name == live_name
+
+
+def test_reconcile_then_ensure_container_reuses_adopted_container():
+    fd = FakeTerminalDocker()
+    fd.running.add("qcterm-orphan4")
+    fd.labels["qcterm-orphan4"] = TAG
+
+    mgr = make_manager(fd)
+    _sync(mgr.reconcile())
+    name, _cwd = _sync(mgr.ensure_container(TAG))
+
+    assert name == "qcterm-orphan4"
+    assert not [a for a in fd.exec_calls if a[0] == "run"]  # no new container created
 
 
 def test_feed_writes_input_frames_for_each_chunk():

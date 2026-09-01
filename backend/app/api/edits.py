@@ -195,13 +195,102 @@ async def repo_git_state(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    """Branch, dirty working-tree entries, and the last 10 commits — Git tab UI."""
+    """Git-tab snapshot: branch, upstream/ahead/behind, staged/changed files,
+    and the last 10 commits."""
     repo = await _get_repo(db, repo_id)
     repo_dir = gitops.workspace_repo_dir(workspace(), repo.github_full_name)
     if not repo_dir.joinpath(".git").is_dir():
         raise HTTPException(status_code=502, detail="workspace clone missing — sync the repo first")
-    state = await gitops.repo_state(repo_dir, repo.github_full_name)
+    try:
+        state = await gitops.repo_state(repo_dir, repo.github_full_name)
+    except GitError as exc:
+        raise HTTPException(status_code=502, detail=f"git state unavailable: {exc}") from exc
     return {"repo_id": str(repo.id), **state}
+
+
+class GitPathsIn(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=500)
+
+
+class GitCommitIn(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+
+
+def _valid_git_paths(paths: list[str]) -> None:
+    if any(not p or len(p) > 1024 for p in paths):
+        raise HTTPException(status_code=422, detail="invalid file path")
+
+
+@router.post("/repos/{repo_id}/git/stage")
+async def git_stage(
+    repo_id: uuid.UUID,
+    body: GitPathsIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Stage files onto the index (`git add -- <paths>`) — Git tab stage action."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    _valid_git_paths(body.paths)
+    try:
+        n = await gitops.stage_paths(repo_dir, repo.github_full_name, body.paths)
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"staged": n}
+
+
+@router.post("/repos/{repo_id}/git/unstage")
+async def git_unstage(
+    repo_id: uuid.UUID,
+    body: GitPathsIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Unstage (`git reset -- <paths>`): move staged entries back to the worktree side."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    _valid_git_paths(body.paths)
+    try:
+        n = await gitops.unstage_paths(repo_dir, repo.github_full_name, body.paths)
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"unstaged": n}
+
+
+@router.post("/repos/{repo_id}/git/commit")
+async def git_commit_staged(
+    repo_id: uuid.UUID,
+    body: GitCommitIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Commit the staged index on the current branch (no branch switch, no PR)."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    try:
+        sha = await gitops.commit_staged(repo_dir, repo.github_full_name, body.message)
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"commit_sha": sha}
+
+
+@router.post("/repos/{repo_id}/git/push")
+async def git_push_branch(
+    repo_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Push the current branch to origin (setting upstream on first push)."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    pat = get_settings().github_pat
+    if not pat:
+        raise HTTPException(status_code=503, detail="GitHub PAT is not configured")
+    try:
+        result = await gitops.push_branch(repo_dir, repo.github_full_name, pat)
+    except GitError as exc:
+        raise HTTPException(status_code=502, detail=f"push failed: {exc}") from exc
+    return {"repo_id": str(repo.id), **result}
 
 
 @router.post("/commit", status_code=201)
