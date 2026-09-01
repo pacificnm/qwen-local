@@ -5,7 +5,7 @@ import { useChat } from "../store/chat";
 import { useProjects } from "../store/projects";
 import ConversationList from "./ConversationList";
 import MainPane from "./MainPane";
-import EditorPane from "./EditorPane";
+import EditorPane from "./editor/EditorPane";
 import ProjectNav from "./ProjectNav";
 import ProjectSettings from "./ProjectSettings";
 
