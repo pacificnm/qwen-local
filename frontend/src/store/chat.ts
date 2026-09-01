@@ -216,7 +216,8 @@ export const useChat = create<ChatState>()((set, get) => ({
       thinkingText: "",
       toolCalls: [],
       error: null,
-      contextUsed: null,
+      // Keep the previous turn's context-used figure: it carries over until
+      // this turn's `done` event reports a fresh value (don't blank it here).
       messages: [...s.messages, optimistic],
     });
 

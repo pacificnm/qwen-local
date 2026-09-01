@@ -1,6 +1,6 @@
 import { DiffEditor, Editor } from "@monaco-editor/react";
 import "../lib/monaco";
-import ChatPane from "./ChatPane";
+import ChatPane from "./chat/ChatPane";
 import TerminalDock from "./TerminalDock";
 import ToolCallsPane from "./ToolCallsPane";
 import { TOOL_CALLS_TAB_ID, useEditor, type EditorTab } from "../store/editor";
