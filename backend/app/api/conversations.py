@@ -128,6 +128,7 @@ async def create_conversation(
     )
     db.add(conv)
     await db.commit()
+    await db.refresh(conv)
     return _conv_out(conv)
 
 
@@ -230,6 +231,7 @@ async def rename_conversation(
     conv = await _get_owned_conv(db, conv_id, user)
     conv.title = body.title.strip()
     await db.commit()
+    await db.refresh(conv)
     return _conv_out(conv)
 
 
