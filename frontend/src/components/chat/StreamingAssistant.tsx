@@ -1,7 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useChat } from "../../store/chat";
-import { markdownComponents } from "./AssistantBody";
+import { markdownComponents } from "./markdownComponents";
 
 /**
  * Live assistant answer shown while the model is streaming.

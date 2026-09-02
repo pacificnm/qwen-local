@@ -1,9 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "../../lib/api";
-import { CodeBlock } from "./CodeBlock";
-
-export const markdownComponents = { pre: CodeBlock };
+import { markdownComponents } from "./markdownComponents";
 
 export function AssistantBody({ msg }: { msg: ChatMessage }) {
   const body = (msg.content ?? "").trim();

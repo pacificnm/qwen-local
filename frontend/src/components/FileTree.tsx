@@ -328,7 +328,7 @@ export default function FileTree({ repoId }: { repoId: string }) {
 
   const rootNode = useMemo(() => buildTree(treePaths), [treePaths]);
   // Nothing is expanded by default — users open folders themselves.
-  const defaultExpanded = useMemo(() => new Set<string>(), [rootNode]);
+  const defaultExpanded = useMemo(() => new Set<string>(), []);
 
   // No filter: user-expanded set (starts empty).
   // With a filter: auto-expand every ancestor of a match.
