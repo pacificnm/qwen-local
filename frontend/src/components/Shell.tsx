@@ -3,7 +3,7 @@ import { useAuth } from "../store/auth";
 import { useModels } from "../store/models";
 import { useChat } from "../store/chat";
 import { useProjects } from "../store/projects";
-import ConversationList from "./ConversationList";
+import ConversationList from "./conversation/List";
 import MainPane from "./MainPane";
 import EditorPane from "./editor/EditorPane";
 import ProjectNav from "./ProjectNav";

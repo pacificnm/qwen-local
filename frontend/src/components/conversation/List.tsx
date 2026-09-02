@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useChat } from "../store/chat";
+import { useChat } from "../../store/chat";
 
 function relTime(iso: string): string {
   const then = new Date(iso).getTime();
