@@ -13,11 +13,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
-
 from app.core.settings import get_settings
 
 from .errors import FileExists, FileNotFound, GitError, GithubApiError, InvalidBranch
+from .github_api import get_json, github_headers, post_json, put_json
 
 FULL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
@@ -427,55 +426,11 @@ async def create_branch(repo_dir: Path, full_name: str, pat: str, name: str) -> 
             raise GitError(f"branch '{name}' already exists on the remote")
         await _run(["git", "checkout", "-b", name], pat=pat, cwd=str(repo_dir))
     return name
-
-
-async def _post_json(url: str, headers: dict, payload: dict) -> tuple[int, dict]:
-    """Small GitHub REST helper (module-level so tests can monkeypatch it)."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-    try:
-        data = resp.json()
-    except ValueError:
-        data = {}
-    return resp.status_code, data if isinstance(data, dict) else {"message": str(data)}
-
-
-async def _get_json(url: str, headers: dict) -> tuple[int, object]:
-    """GET sibling of `_post_json`. GitHub list endpoints (e.g. `/pulls`) return
-    a JSON array, so unlike `_post_json` this does NOT coerce to a dict."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-        resp = await client.get(url, headers=headers)
-    try:
-        data = resp.json()
-    except ValueError:
-        data = None
-    return resp.status_code, data
-
-
-async def _put_json(url: str, headers: dict, payload: dict) -> tuple[int, dict]:
-    """PUT sibling of `_post_json` (used for the merge endpoint)."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-        resp = await client.put(url, headers=headers, json=payload)
-    try:
-        data = resp.json()
-    except ValueError:
-        data = {}
-    return resp.status_code, data if isinstance(data, dict) else {"message": str(data)}
-
-
-def _github_headers(pat: str) -> dict:
-    return {
-        "Authorization": f"token {pat}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-
 async def _open_pr(full_name: str, pat: str, title: str, body: str, head: str, base: str) -> dict:
     """POST a new PR; returns GitHub's raw parsed response body."""
-    status, data = await _post_json(
+    status, data = await post_json(
         f"https://api.github.com/repos/{full_name}/pulls",
-        _github_headers(pat),
+        github_headers(pat),
         {"title": title, "body": body, "head": head, "base": base},
     )
     if status != 201:
@@ -521,9 +476,9 @@ async def open_branch_pull_request(
 async def find_open_pr(full_name: str, pat: str, branch: str) -> dict | None:
     """The open PR (if any) whose head is `branch`. `None` when there is none."""
     owner = full_name.split("/", 1)[0]
-    status, data = await _get_json(
+    status, data, _headers = await get_json(
         f"https://api.github.com/repos/{full_name}/pulls?head={owner}:{branch}&state=open",
-        _github_headers(pat),
+        github_headers(pat),
     )
     if status != 200:
         msg = data.get("message", "unknown error") if isinstance(data, dict) else "unknown error"
@@ -720,9 +675,9 @@ async def merge_pull_request(
     failure there must not be reported as the merge having failed.
     """
     async with _lock_for(full_name):
-        status, data = await _put_json(
+        status, data = await put_json(
             f"https://api.github.com/repos/{full_name}/pulls/{pr_number}/merge",
-            _github_headers(pat),
+            github_headers(pat),
             {"merge_method": "squash"},
         )
         if status != 200 or not data.get("merged"):

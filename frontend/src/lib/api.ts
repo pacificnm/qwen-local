@@ -403,6 +403,127 @@ export async function mergePullRequest(repoId: string): Promise<{ merged: boolea
   return handle<{ merged: boolean; sha: string }>(res);
 }
 
+// --------------------------------------------------------------------------- //
+// Issues tab
+// --------------------------------------------------------------------------- //
+
+export type IssueState = "open" | "closed";
+
+export interface GitHubLabel {
+  name: string;
+  color: string;
+}
+
+export interface GitHubUser {
+  login: string;
+  avatar_url: string;
+}
+
+export interface GitHubIssue {
+  number: number;
+  title: string;
+  body: string;
+  state: IssueState;
+  user: string | null;
+  labels: GitHubLabel[];
+  assignees: GitHubUser[];
+  comments: number;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+}
+
+export interface GitHubComment {
+  id: number;
+  body: string;
+  user: string | null;
+  avatar_url: string | null;
+  created_at: string;
+}
+
+export interface IssuesMeta {
+  labels: GitHubLabel[];
+  assignees: GitHubUser[];
+}
+
+export async function listIssues(
+  repoId: string,
+  opts: { state?: "open" | "closed" | "all"; labels?: string; page?: number } = {},
+): Promise<{ items: GitHubIssue[]; has_more: boolean }> {
+  const params = new URLSearchParams();
+  params.set("state", opts.state ?? "open");
+  if (opts.labels) params.set("labels", opts.labels);
+  if (opts.page) params.set("page", String(opts.page));
+  const res = await fetch(`${BASE}/repos/${repoId}/issues?${params}`, { credentials: "same-origin" });
+  return handle<{ items: GitHubIssue[]; has_more: boolean }>(res);
+}
+
+export async function getIssuesMeta(repoId: string): Promise<IssuesMeta> {
+  const res = await fetch(`${BASE}/repos/${repoId}/issues/meta`, { credentials: "same-origin" });
+  return handle<IssuesMeta>(res);
+}
+
+export async function getIssue(
+  repoId: string,
+  number: number,
+): Promise<{ issue: GitHubIssue; comments: GitHubComment[] }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/issues/${number}`, { credentials: "same-origin" });
+  return handle<{ issue: GitHubIssue; comments: GitHubComment[] }>(res);
+}
+
+export interface IssueCreateBody {
+  title: string;
+  body?: string;
+  labels?: string[];
+  assignees?: string[];
+}
+
+export async function createIssue(repoId: string, body: IssueCreateBody): Promise<GitHubIssue> {
+  const res = await fetch(`${BASE}/repos/${repoId}/issues`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handle<GitHubIssue>(res);
+}
+
+export interface IssueUpdateBody {
+  title?: string;
+  body?: string;
+  state?: IssueState;
+  labels?: string[];
+  assignees?: string[];
+}
+
+export async function updateIssue(
+  repoId: string,
+  number: number,
+  body: IssueUpdateBody,
+): Promise<GitHubIssue> {
+  const res = await fetch(`${BASE}/repos/${repoId}/issues/${number}`, {
+    method: "PATCH",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handle<GitHubIssue>(res);
+}
+
+export async function addIssueComment(
+  repoId: string,
+  number: number,
+  body: string,
+): Promise<GitHubComment> {
+  const res = await fetch(`${BASE}/repos/${repoId}/issues/${number}/comments`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  return handle<GitHubComment>(res);
+}
+
 export async function unlinkRepo(id: string): Promise<void> {
   const res = await fetch(`${BASE}/repos/${id}`, { method: "DELETE", credentials: "same-origin" });
   if (!res.ok) {

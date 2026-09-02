@@ -67,7 +67,7 @@ async def test_open_pr_returns_url_on_201(monkeypatch):
     async def fake_post(url, headers, payload):
         return 201, {"html_url": "https://github.com/o/r/pull/7", "number": 7}
 
-    monkeypatch.setattr(gitops, "_post_json", fake_post)
+    monkeypatch.setattr(gitops, "post_json", fake_post)
     url = await gitops.open_pull_request("o/r", "pat", "T", "B", "head", "main")
     assert url == "https://github.com/o/r/pull/7"
 
@@ -76,7 +76,7 @@ async def test_open_pr_raises_on_non_201(monkeypatch):
     async def fake_post(url, headers, payload):
         return 409, {"message": "A pull request already exists"}
 
-    monkeypatch.setattr(gitops, "_post_json", fake_post)
+    monkeypatch.setattr(gitops, "post_json", fake_post)
     with pytest.raises(GithubApiError):
         await gitops.open_pull_request("o/r", "pat", "T", "B", "head", "main")
 
@@ -85,7 +85,7 @@ async def test_open_pr_raises_when_url_missing(monkeypatch):
     async def fake_post(url, headers, payload):
         return 201, {}  # no html_url
 
-    monkeypatch.setattr(gitops, "_post_json", fake_post)
+    monkeypatch.setattr(gitops, "post_json", fake_post)
     with pytest.raises(GithubApiError):
         await gitops.open_pull_request("o/r", "pat", "T", "B", "head", "main")
 
@@ -100,7 +100,7 @@ async def test_open_branch_pr_appends_closes_when_issue_given(monkeypatch):
         captured.update(payload)
         return 201, {"html_url": "https://github.com/o/r/pull/12", "number": 12}
 
-    monkeypatch.setattr(gitops, "_post_json", fake_post)
+    monkeypatch.setattr(gitops, "post_json", fake_post)
     result = await gitops.open_branch_pull_request(
         "o/r", "pat", "issue-42-fix-thing", "main", "Fix thing", "body text", 42
     )
@@ -118,7 +118,7 @@ async def test_open_branch_pr_omits_closes_without_issue(monkeypatch):
         captured.update(payload)
         return 201, {"html_url": "https://github.com/o/r/pull/13", "number": 13}
 
-    monkeypatch.setattr(gitops, "_post_json", fake_post)
+    monkeypatch.setattr(gitops, "post_json", fake_post)
     await gitops.open_branch_pull_request("o/r", "pat", "chore/cleanup", "main", "Cleanup", "", None)
     assert "Closes" not in captured["body"]
 
@@ -127,26 +127,26 @@ async def test_find_open_pr_returns_none_when_empty(monkeypatch):
     async def fake_get(url, headers):
         assert "head=o:feature" in url
         assert "state=open" in url
-        return 200, []
+        return 200, [], {}
 
-    monkeypatch.setattr(gitops, "_get_json", fake_get)
+    monkeypatch.setattr(gitops, "get_json", fake_get)
     assert await gitops.find_open_pr("o/r", "pat", "feature") is None
 
 
 async def test_find_open_pr_returns_first_match(monkeypatch):
     async def fake_get(url, headers):
-        return 200, [{"number": 5, "html_url": "https://github.com/o/r/pull/5", "title": "T"}]
+        return 200, [{"number": 5, "html_url": "https://github.com/o/r/pull/5", "title": "T"}], {}
 
-    monkeypatch.setattr(gitops, "_get_json", fake_get)
+    monkeypatch.setattr(gitops, "get_json", fake_get)
     pr = await gitops.find_open_pr("o/r", "pat", "feature")
     assert pr == {"number": 5, "url": "https://github.com/o/r/pull/5", "title": "T"}
 
 
 async def test_find_open_pr_raises_on_error_status(monkeypatch):
     async def fake_get(url, headers):
-        return 404, {"message": "Not Found"}
+        return 404, {"message": "Not Found"}, {}
 
-    monkeypatch.setattr(gitops, "_get_json", fake_get)
+    monkeypatch.setattr(gitops, "get_json", fake_get)
     with pytest.raises(GithubApiError):
         await gitops.find_open_pr("o/r", "pat", "feature")
 
@@ -206,7 +206,7 @@ async def test_merge_pull_request_deletes_branch_and_returns_to_default(tmp_path
         assert payload["merge_method"] == "squash"
         return 200, {"merged": True, "sha": "abc123"}
 
-    monkeypatch.setattr(gitops, "_put_json", fake_put)
+    monkeypatch.setattr(gitops, "put_json", fake_put)
     result = await gitops.merge_pull_request(clone, "o/r", "", "issue-1-fix", 3, "main")
 
     assert result == {"merged": True, "sha": "abc123"}
@@ -226,7 +226,7 @@ async def test_merge_pull_request_raises_when_github_rejects(tmp_path, monkeypat
     async def fake_put(url, headers, payload):
         return 405, {"message": "Pull Request is not mergeable"}
 
-    monkeypatch.setattr(gitops, "_put_json", fake_put)
+    monkeypatch.setattr(gitops, "put_json", fake_put)
     with pytest.raises(GithubApiError):
         await gitops.merge_pull_request(clone, "o/r", "", "issue-2-fix", 3, "main")
     # Not merged — still on the feature branch, nothing deleted.
@@ -458,7 +458,7 @@ async def test_commit_workspace_opens_pr_when_asked(tmp_path, monkeypatch):
         captured.update(url=url, payload=payload)
         return 201, {"html_url": "https://github.com/o/r/pull/9", "number": 9}
 
-    monkeypatch.setattr(gitops, "_post_json", fake_post)
+    monkeypatch.setattr(gitops, "post_json", fake_post)
     result = await gitops.commit_workspace(
         ws, "o/r", pat="", message="agent change", branch="agent/pr",
         open_pr=True, pr_title="Agent change", pr_body="from the agent",

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { GitState } from "../../lib/api";
 import { slugifyText } from "../../lib/slugify";
 import { useEditor } from "../../store/editor";
@@ -9,10 +9,21 @@ export function GitBranchBar({ repoId, git }: { repoId: string; git: GitState })
   const gitBusy = useEditor((s) => s.gitBusy);
   const createBranch = useEditor((s) => s.createBranch);
   const pushBranch = useEditor((s) => s.pushBranch);
+  const pendingBranchIssue = useEditor((s) => s.pendingBranchIssue);
+  const setPendingBranchIssue = useEditor((s) => s.setPendingBranchIssue);
 
   const [creating, setCreating] = useState(false);
   const [issueNumber, setIssueNumber] = useState("");
   const [description, setDescription] = useState("");
+
+  // Consumed once from the Issues tab's "Start branch" action, then cleared.
+  useEffect(() => {
+    if (!pendingBranchIssue) return;
+    setIssueNumber(String(pendingBranchIssue.number));
+    setDescription(pendingBranchIssue.title);
+    setCreating(true);
+    setPendingBranchIssue(null);
+  }, [pendingBranchIssue, setPendingBranchIssue]);
 
   const slug = slugifyText(description);
   const computedName = issueNumber.trim() ? `issue-${issueNumber.trim()}-${slug}` : slug;

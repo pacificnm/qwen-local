@@ -37,8 +37,13 @@ interface EditorState {
   setView: (id: string, view: "edit" | "diff") => void;
 
   /** Active right-pane tab. */
-  tab: "code" | "git";
-  setTab: (tab: "code" | "git") => void;
+  tab: "code" | "git" | "issues";
+  setTab: (tab: "code" | "git" | "issues") => void;
+
+  /** Set by the Issues tab's "Start branch" action; GitBranchBar consumes it
+   * once (pre-fills the new-branch form) then clears it. */
+  pendingBranchIssue: { number: number; title: string } | null;
+  setPendingBranchIssue: (issue: { number: number; title: string } | null) => void;
 
   /** Code-tab folder tree (repo id + sorted file paths). */
   treeRepoId: string | null;
@@ -183,6 +188,11 @@ export const useEditor = create<EditorState>()((set, get) => ({
     set({ tab });
   },
 
+  pendingBranchIssue: null,
+  setPendingBranchIssue(issue) {
+    set({ pendingBranchIssue: issue });
+  },
+
   treeRepoId: null,
   treePaths: [],
   treeLoading: false,
@@ -219,6 +229,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
       editorTabs: [],
       activeTabId: null,
       tab: "code",
+      pendingBranchIssue: null,
       treeRepoId: null,
       treePaths: [],
       treeLoading: false,

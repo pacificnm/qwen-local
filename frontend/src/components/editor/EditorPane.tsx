@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 import { useEditor } from "../../store/editor";
+import { useIssues } from "../../store/issues";
 import { useProjects } from "../../store/projects";
 import { CodeTab } from "./CodeTab";
 import { GitTab } from "./GitTab";
+import { IssuesTab } from "./IssuesTab";
 
 export default function EditorPane() {
   const tab = useEditor((s) => s.tab);
@@ -16,13 +18,14 @@ export default function EditorPane() {
   useEffect(() => {
     const ed = useEditor.getState();
     ed.reset();
+    useIssues.getState().reset();
     if (activeRepoId) {
       void ed.loadTree(activeRepoId);
       void ed.loadGit(activeRepoId);
     }
   }, [activeId, activeRepoId]);
 
-  const setTab = (t: "code" | "git") => useEditor.getState().setTab(t);
+  const setTab = (t: "code" | "git" | "issues") => useEditor.getState().setTab(t);
 
   return (
     <div className="editor-pane">
@@ -47,6 +50,16 @@ export default function EditorPane() {
         >
           Git
         </button>
+        <button
+          role="tab"
+          id="rtab-issues"
+          aria-selected={tab === "issues"}
+          aria-controls="rtab-panes"
+          className={tab === "issues" ? "active" : ""}
+          onClick={() => setTab("issues")}
+        >
+          Issues
+        </button>
       </div>
 
       <div className="editor-scroll" id="rtab-panes">
@@ -55,6 +68,9 @@ export default function EditorPane() {
         </section>
         <section className={tab === "git" ? "tabpane" : "tabpane hidden"}>
           <GitTab />
+        </section>
+        <section className={tab === "issues" ? "tabpane" : "tabpane hidden"}>
+          <IssuesTab />
         </section>
       </div>
     </div>

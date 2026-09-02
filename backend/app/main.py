@@ -5,7 +5,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.api import auth, chat, conversations, edits, health, models_api, projects, repos, terminals
+from app.api import auth, chat, conversations, edits, health, issues, models_api, projects, repos, terminals
 from app.db.session import dispose_engine
 from app.sandbox.terminal import get_terminal_manager
 
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(repos.router)
     app.include_router(edits.router)
+    app.include_router(issues.router)
     app.include_router(conversations.router)
     app.include_router(chat.router)
     app.include_router(terminals.router)
