@@ -1,8 +1,6 @@
-"""Phase 4: editor file access + Commit to GitHub (branch → commit → PR).
+"""Editor file access + the Git tab's stage/branch/commit/push/PR/merge routes.
 
 File reads serve the Monaco pane (original content for the diff view).
-`POST /commit` implements docs/API.md "Commit / PR": create branch from the
-upstream default, commit the edited file, push, optionally open a PR.
 """
 
 import asyncio
@@ -23,7 +21,6 @@ from app.repos.errors import (
     GitError,
     GithubApiError,
     InvalidBranch,
-    SyncError,
 )
 from app.repos.sync import workspace
 
@@ -31,18 +28,6 @@ router = APIRouter(prefix="/api", tags=["edits"])
 
 MAX_FILE_READ = 1 * 1024 * 1024  # 1 MB hard cap for the editor (spec §5 edge case)
 MAX_CONTENT = 1 * 1024 * 1024  # same ceiling on the content we commit
-
-
-class CommitIn(BaseModel):
-    repo_id: uuid.UUID
-    file_path: str = Field(min_length=1, max_length=1024)
-    content: str = Field(min_length=1, max_length=MAX_CONTENT)
-    base_ref: str | None = None  # accepted for API.md compatibility; commits always branch from upstream HEAD
-    branch: str = Field(default="qwen-assist/edits", min_length=1)
-    commit_message: str = Field(min_length=1, max_length=500)
-    open_pr: bool = False
-    pr_title: str | None = Field(default=None, max_length=300)
-    pr_body: str | None = Field(default=None, max_length=20000)
 
 
 class RenameIn(BaseModel):
@@ -411,50 +396,3 @@ async def git_merge_pr(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"repo_id": str(repo.id), **result}
 
-
-@router.post("/commit", status_code=201)
-async def commit_to_github(
-    body: CommitIn,
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
-):
-    repo = await _get_repo(db, body.repo_id)
-    pat = get_settings().github_pat
-    if not pat:
-        raise HTTPException(status_code=503, detail="GitHub PAT is not configured")
-
-    branch = body.branch.strip()
-    if not gitops.is_valid_branch(branch):
-        raise HTTPException(status_code=422, detail="branch name is not a valid git ref name")
-
-    pr_title = (body.pr_title or "").strip() or body.commit_message.strip()
-    pr_body = (body.pr_body or "").strip() or (
-        f"## Summary\n\n{body.commit_message.strip()}\n\n## Files\n\n- `{body.file_path}`\n"
-    )
-    try:
-        result = await gitops.commit_file(
-            workspace=workspace(),
-            full_name=repo.github_full_name,
-            pat=pat,
-            file_path=body.file_path,
-            content=body.content,
-            branch=branch,
-            commit_message=body.commit_message,
-            open_pr=body.open_pr,
-            pr_title=pr_title,
-            pr_body=pr_body,
-        )
-    except FileNotFound as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except InvalidBranch as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except GithubApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except SyncError as exc:
-        raise HTTPException(status_code=502, detail=f"git operation failed: {exc}") from exc
-
-    return {
-        "branch": result.branch,
-        "commit_sha": result.commit_sha,
-        "pr_url": result.pr_url,
-    }

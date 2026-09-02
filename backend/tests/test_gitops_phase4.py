@@ -400,45 +400,6 @@ async def test_ensure_repo_reports_upstream_default(tmp_path):
     assert branch == "main"  # resolved from origin/HEAD, not the parked branch
 
 
-async def test_commit_file_restores_worktree_to_default_branch(tmp_path):
-    # Full offline commit_file: branch → commit → push → restore. The final
-    # restore is the regression being pinned.
-    ws = tmp_path / "ws"
-    upstream = tmp_path / "upstream"
-    _make_upstream_with_clone(upstream, ws / "o__r")
-
-    result = await gitops.commit_file(
-        workspace=ws,
-        full_name="o/r",
-        pat="",
-        file_path="hello.txt",
-        content="edited\n",
-        branch="qwen-assist/fix",
-        commit_message="update hello",
-        open_pr=False,
-        pr_title="",
-        pr_body="",
-    )
-    assert result.branch == "qwen-assist/fix"
-    assert result.commit_sha
-    assert result.pr_url is None
-
-    clone = ws / "o__r"
-    # Worktree is BACK on the upstream default branch after the call.
-    head = subprocess.run(
-        ["git", "-C", str(clone), "symbolic-ref", "--short", "HEAD"],
-        check=True, text=True, capture_output=True,
-    ).stdout.strip()
-    assert head == "main"
-
-    # The commit landed on the (remote) feature branch.
-    ref = subprocess.run(
-        ["git", "-C", str(upstream), "show-ref", "--verify", "refs/heads/qwen-assist/fix"],
-        check=True, text=True, capture_output=True,
-    ).stdout
-    assert result.commit_sha in ref
-
-
 # --- commit_workspace (agent edits → branch → push → optional PR) -----------
 # The Qwen-Agent repo tools stage uncommitted edits in the shared worktree;
 # commit_workspace branches from HEAD, `add -A`s them, commits, pushes, and

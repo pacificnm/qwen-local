@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { useEditor } from "../../store/editor";
 import { useRepos } from "../../store/repos";
-import { CommitForm } from "./CommitForm";
 import { GitBranchBar } from "./GitBranchBar";
 import { GitCommitBox } from "./GitCommitBox";
 import { GitFileRow } from "./GitFileRow";
@@ -18,8 +17,6 @@ export function GitTab() {
   const gitNotice = useEditor((s) => s.gitNotice);
   const stage = useEditor((s) => s.stage);
   const unstage = useEditor((s) => s.unstage);
-  const commitResult = useEditor((s) => s.commitResult);
-  const commitError = useEditor((s) => s.commitError);
   const repos = useRepos((s) => s.repos);
 
   useEffect(() => {
@@ -189,48 +186,9 @@ export function GitTab() {
         </>
       )}
 
-      {git && (
-        <div className="git-quickcommit">
-          <h4 className="git-sec-title">Quick commit — open file</h4>
-          <p className="dim git-quickcommit-hint">
-            Publishes the file open in the editor directly, on its own new branch (with an
-            optional PR) — independent of staging above. Use this for a one-off edit; use the
-            branch workflow above for anything you'll keep working on.
-          </p>
-          <CommitForm repoId={repoId} />
-        </div>
-      )}
       {!git && !gitError && (
         <div className="commit-card">
           <p className="dim">Git state is required to commit (the sync clone must exist).</p>
-        </div>
-      )}
-
-      {commitResult && (
-        <div className="banner banner-ok" role="status">
-          <div>
-            <strong>{commitResult.branch}</strong> · commit{" "}
-            <code>{commitResult.commit_sha.slice(0, 8)}</code> pushed
-            {commitResult.pr_url ? (
-              <>
-                {" "}
-                →{" "}
-                <a href={commitResult.pr_url} target="_blank" rel="noopener noreferrer" className="pr-link">
-                  open PR
-                </a>
-              </>
-            ) : (
-              " (branch pushed, no PR)"
-            )}
-            <span className="banner-dim"> — recorded in the active conversation</span>
-          </div>
-          <button onClick={() => useEditor.getState().clearResult()}>dismiss</button>
-        </div>
-      )}
-      {commitError && (
-        <div className="banner banner-error" role="alert">
-          <span>{commitError}</span>
-          <button onClick={() => useEditor.getState().clearResult()}>dismiss</button>
         </div>
       )}
     </div>

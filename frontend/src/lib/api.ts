@@ -403,47 +403,6 @@ export async function mergePullRequest(repoId: string): Promise<{ merged: boolea
   return handle<{ merged: boolean; sha: string }>(res);
 }
 
-export interface CommitBody {
-  repo_id: string;
-  file_path: string;
-  content: string;
-  base_ref?: string | null;
-  branch?: string;
-  commit_message: string;
-  open_pr?: boolean;
-  pr_title?: string | null;
-  pr_body?: string | null;
-}
-
-export interface CommitResult {
-  branch: string;
-  commit_sha: string;
-  pr_url: string | null;
-}
-
-export async function commitToFile(body: CommitBody): Promise<CommitResult> {
-  const res = await fetch(`${BASE}/commit`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handle<CommitResult>(res);
-}
-
-export async function recordPrNote(
-  convId: string,
-  body: { text: string; tool?: Record<string, unknown> | null },
-): Promise<ChatMessage> {
-  const res = await fetch(`${BASE}/conversations/${convId}/notes`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return handle<ChatMessage>(res);
-}
-
 export async function unlinkRepo(id: string): Promise<void> {
   const res = await fetch(`${BASE}/repos/${id}`, { method: "DELETE", credentials: "same-origin" });
   if (!res.ok) {

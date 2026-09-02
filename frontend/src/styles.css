@@ -1190,56 +1190,6 @@ body.pane-dragging .pane-resizer::after {
   justify-content: space-between;
 }
 
-.commit-form {
-  margin-top: 0.7rem;
-  border-top: 1px solid var(--border);
-  padding-top: 0.7rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-
-.commit-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.commit-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.72rem;
-  color: var(--text-dim);
-}
-
-.commit-grid input,
-.commit-grid select {
-  font-size: 0.85rem;
-  color: var(--text);
-}
-
-.commit-pr-check {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.82rem;
-  color: var(--text-dim);
-}
-
-.commit-pr-extra {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-}
-
-.commit-pr-extra input,
-.commit-pr-extra textarea {
-  font-size: 0.85rem;
-  color: var(--text);
-  resize: vertical;
-}
-
 .commit-actions {
   display: flex;
   justify-content: flex-end;
@@ -1247,23 +1197,6 @@ body.pane-dragging .pane-resizer::after {
 
 .commit-actions button {
   padding: 0.45rem 1rem;
-}
-
-.commit-file {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.82rem;
-  color: var(--text);
-  background: var(--bg-elev);
-  border-radius: 6px;
-  padding: 0.25rem 0.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.commit-file-muted {
-  font-size: 0.8rem;
-  color: var(--text-dim);
 }
 
 /* --- Right pane: Code / Git tab bar --- */
@@ -1688,16 +1621,6 @@ body.pane-dragging .pane-resizer::after {
   align-items: center;
 }
 
-.gittab .commit-form {
-  margin-top: 0;
-  border-top: 0;
-  padding-top: 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.7rem 0.75rem 0.8rem;
-  background: var(--bg-panel);
-}
-
 /* --- Git tab: file rows, stage/unstage, commit box, push --- */
 
 .git-sec-head {
@@ -2018,22 +1941,6 @@ body.pane-dragging .pane-resizer::after {
 
 .git-recent .git-log {
   margin-top: 0.4rem;
-}
-
-/* --- Git tab: quick commit (open file) — deliberately de-emphasized and
-   separated from the branch-aware flow above it (a different mechanism:
-   commits the editor's in-memory buffer directly, see CommitForm.tsx) --- */
-
-.git-quickcommit {
-  border-top: 1px dashed var(--border);
-  padding-top: 0.7rem;
-  opacity: 0.92;
-}
-
-.git-quickcommit-hint {
-  margin: 0 0 0.5rem;
-  font-size: 0.76rem;
-  line-height: 1.4;
 }
 
 /* --- Main pane: fixed Chat tab + file tabs --- */

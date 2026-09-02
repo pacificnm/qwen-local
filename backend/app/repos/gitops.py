@@ -534,59 +534,6 @@ async def find_open_pr(full_name: str, pat: str, branch: str) -> dict | None:
     return {"number": pr.get("number"), "url": pr.get("html_url"), "title": pr.get("title")}
 
 
-async def commit_file(
-    workspace: Path,
-    full_name: str,
-    pat: str,
-    file_path: str,
-    content: str,
-    branch: str,
-    commit_message: str,
-    open_pr: bool,
-    pr_title: str,
-    pr_body: str,
-) -> CommitResult:
-    """Branch from upstream HEAD → write file → commit → push → optional PR.
-
-    Raises FileNotFound / InvalidBranch / GithubApiError / GitError. The
-    working copy is restored to the default branch before returning; the
-    commit stays safe on the remote branch.
-    """
-    if not is_valid_branch(branch):
-        raise InvalidBranch("branch name is not a valid git ref name")
-    async with _lock_for(full_name):
-        repo_dir, default_branch = await ensure_repo(workspace, full_name, pat)
-        target = resolve_safe(repo_dir, file_path)
-        if not target.is_file():
-            raise FileNotFound(f"file not found on the base branch: {file_path}")
-
-        name = await _create_branch(repo_dir, pat, branch)
-        await asyncio.to_thread(target.write_text, content, encoding="utf-8")
-        await _run(["git", "add", "--", file_path], pat=pat, cwd=str(repo_dir))
-        await _run(
-            ["git", "commit", "-m", commit_message],
-            pat=pat,
-            cwd=str(repo_dir),
-            env_extra=_commit_identity(),
-        )
-        sha = (await _run(["git", "rev-parse", "HEAD"], pat=pat, cwd=str(repo_dir))).strip()
-        await _run(["git", "push", "origin", name], pat=pat, cwd=str(repo_dir))
-
-        pr_url = None
-        if open_pr:
-            pr_url = await open_pull_request(
-                full_name, pat, pr_title, pr_body, name, default_branch
-            )
-
-        # Leave the shared worktree back on the default branch — a branch
-        # *switch* (`checkout -- <name>` would parse the name as a pathspec
-        # and fail for branch names). The commit stays on the remote branch.
-        if default_branch != "HEAD":
-            await _run(["git", "checkout", "-f", default_branch], pat=pat, cwd=str(repo_dir))
-
-    return CommitResult(branch=name, commit_sha=sha, pr_url=pr_url)
-
-
 async def commit_workspace(
     workspace: Path,
     full_name: str,
