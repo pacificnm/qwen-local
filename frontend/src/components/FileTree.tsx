@@ -19,6 +19,7 @@ import { addFileToChat } from "../lib/fileMentionBus";
 import { useEditor } from "../store/editor";
 import { useProjects } from "../store/projects";
 import { useRepos } from "../store/repos";
+import { BadgeChip, type Badge } from "./file/BadgeChip";
 
 type Node =
   | { kind: "dir"; name: string; path: string; children: Node[] }
@@ -36,7 +37,6 @@ function parentDirOf(path: string): string {
 /* --- git status badges, VSCode's explorer letters and (dark-theme) colors --- */
 type GitEntry = { path: string; status: string };
 const EMPTY_ENTRIES: GitEntry[] = [];
-type Badge = { letter: string; color: string };
 const BADGES: Record<string, Badge> = {
   M: { letter: "M", color: "#73cffe" },
   U: { letter: "U", color: "#81b88b" },
@@ -67,14 +67,6 @@ function statusFor(entries: GitEntry[], path: string, isDir: boolean): Badge | n
     if (b && (!best || RANK[b.letter] > RANK[best.letter])) best = b;
   }
   return best;
-}
-
-function BadgeChip({ b }: { b: Badge }) {
-  return (
-    <span className="tree-badge" style={{ background: b.color }} title={`git: ${b.letter}`}>
-      {b.letter}
-    </span>
-  );
 }
 
 function buildTree(paths: string[]): Node[] {
