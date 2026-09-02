@@ -196,7 +196,8 @@ async def repo_git_state(
     _user: User = Depends(get_current_user),
 ):
     """Git-tab snapshot: branch, upstream/ahead/behind, staged/changed files,
-    and the last 10 commits."""
+    the last 10 commits, the repo's default branch, and any open PR for the
+    current branch."""
     repo = await _get_repo(db, repo_id)
     repo_dir = gitops.workspace_repo_dir(workspace(), repo.github_full_name)
     if not repo_dir.joinpath(".git").is_dir():
@@ -205,7 +206,16 @@ async def repo_git_state(
         state = await gitops.repo_state(repo_dir, repo.github_full_name)
     except GitError as exc:
         raise HTTPException(status_code=502, detail=f"git state unavailable: {exc}") from exc
-    return {"repo_id": str(repo.id), **state}
+
+    pr = None
+    pat = get_settings().github_pat
+    if pat and state["branch"] and state["branch"] != repo.default_branch:
+        try:
+            pr = await gitops.find_open_pr(repo.github_full_name, pat, state["branch"])
+        except GithubApiError:
+            pr = None  # best-effort — a flaky GitHub call must not sink the whole snapshot
+
+    return {"repo_id": str(repo.id), "default_branch": repo.default_branch, "pr": pr, **state}
 
 
 class GitPathsIn(BaseModel):
@@ -290,6 +300,115 @@ async def git_push_branch(
         result = await gitops.push_branch(repo_dir, repo.github_full_name, pat)
     except GitError as exc:
         raise HTTPException(status_code=502, detail=f"push failed: {exc}") from exc
+    return {"repo_id": str(repo.id), **result}
+
+
+class GitBranchIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/repos/{repo_id}/git/branch", status_code=201)
+async def git_create_branch(
+    repo_id: uuid.UUID,
+    body: GitBranchIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Create and check out a new branch from the current HEAD — the start of
+    the issue → branch → PR → merge flow. The frontend computes the full
+    `issue-{n}-{slug}` (or plain `{slug}`) name; this just validates + creates
+    it, erroring (not silently suffixing) if it already exists."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    pat = get_settings().github_pat
+    if not pat:
+        raise HTTPException(status_code=503, detail="GitHub PAT is not configured")
+    try:
+        branch = await gitops.create_branch(repo_dir, repo.github_full_name, pat, body.name.strip())
+    except InvalidBranch as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"repo_id": str(repo.id), "branch": branch}
+
+
+class GitPrIn(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    body: str | None = Field(default=None, max_length=10000)
+    issue_number: int | None = Field(default=None, ge=1)
+
+
+@router.post("/repos/{repo_id}/git/pr", status_code=201)
+async def git_open_pr(
+    repo_id: uuid.UUID,
+    body: GitPrIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Open a PR for the current branch against the repo's default branch.
+
+    Pushes the branch first (idempotent — a no-op if already up to date):
+    GitHub can't open a PR against a branch it has never seen.
+    """
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    pat = get_settings().github_pat
+    if not pat:
+        raise HTTPException(status_code=503, detail="GitHub PAT is not configured")
+    try:
+        pushed = await gitops.push_branch(repo_dir, repo.github_full_name, pat)
+    except GitError as exc:
+        raise HTTPException(status_code=502, detail=f"push failed: {exc}") from exc
+    branch = pushed["branch"]
+    if branch == repo.default_branch:
+        raise HTTPException(status_code=422, detail="cannot open a pull request from the default branch")
+    try:
+        pr = await gitops.open_branch_pull_request(
+            repo.github_full_name,
+            pat,
+            branch,
+            repo.default_branch,
+            body.title.strip(),
+            (body.body or "").strip(),
+            body.issue_number,
+        )
+    except GithubApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"repo_id": str(repo.id), **pr}
+
+
+@router.post("/repos/{repo_id}/git/pr/merge")
+async def git_merge_pr(
+    repo_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Squash-merge the open PR for the current branch, delete the branch on
+    GitHub, and check the clone back out to the default branch."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    pat = get_settings().github_pat
+    if not pat:
+        raise HTTPException(status_code=503, detail="GitHub PAT is not configured")
+    try:
+        state = await gitops.repo_state(repo_dir, repo.github_full_name)
+    except GitError as exc:
+        raise HTTPException(status_code=502, detail=f"git state unavailable: {exc}") from exc
+    branch = state["branch"]
+    if not branch or branch == repo.default_branch:
+        raise HTTPException(status_code=422, detail="no feature branch is checked out")
+    try:
+        pr = await gitops.find_open_pr(repo.github_full_name, pat, branch)
+    except GithubApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if pr is None:
+        raise HTTPException(status_code=404, detail="no open pull request for the current branch")
+    try:
+        result = await gitops.merge_pull_request(
+            repo_dir, repo.github_full_name, pat, branch, pr["number"], repo.default_branch
+        )
+    except GithubApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"repo_id": str(repo.id), **result}
 
 

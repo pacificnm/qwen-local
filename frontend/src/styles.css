@@ -1548,7 +1548,7 @@ body.pane-dragging .pane-resizer::after {
   word-break: break-all;
 }
 
-.git-branchline {
+.git-statusline {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1872,6 +1872,168 @@ body.pane-dragging .pane-resizer::after {
 .git-push-btn {
   flex-shrink: 0;
   padding: 0.4rem 0.9rem;
+}
+
+/* --- Git tab: branch bar (new-branch flow) --- */
+
+.git-branchbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.git-branchbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.git-newbranch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-panel));
+  padding: 0.6rem 0.7rem;
+}
+
+.git-newbranch-fields {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.git-newbranch-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.git-newbranch-fields input {
+  font-size: 0.85rem;
+}
+
+.git-newbranch-fields label:first-child {
+  flex: 0 0 5.5rem;
+}
+
+.git-newbranch-desc {
+  flex: 1;
+  min-width: 0;
+}
+
+.git-newbranch-preview {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.git-newbranch-preview code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text);
+  background: var(--bg-elev);
+  border-radius: 5px;
+  padding: 0.05rem 0.35rem;
+}
+
+.git-newbranch-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* --- Git tab: working tree (staged + changes merged into one card) --- */
+
+.git-worktree {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.git-worktree > .git-sec-title {
+  margin: 0;
+}
+
+.git-sec-subhead {
+  margin-bottom: 0.3rem;
+}
+
+.git-sec-subtitle {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* --- Git tab: pull request box --- */
+
+.git-pr-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.git-pr-box input,
+.git-pr-box textarea {
+  font-size: 0.85rem;
+}
+
+.git-pr-summary {
+  font-size: 0.88rem;
+}
+
+.git-pr-open {
+  border: 1px solid color-mix(in srgb, #2fbf71 40%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, #2fbf71 6%, var(--bg-panel));
+  padding: 0.6rem 0.7rem;
+}
+
+/* --- Git tab: collapsible Recent commits --- */
+
+.git-recent summary {
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+  list-style: none;
+}
+
+.git-recent summary::-webkit-details-marker {
+  display: none;
+}
+
+.git-recent summary::before {
+  content: "▸ ";
+  color: var(--text-dim);
+}
+
+.git-recent[open] summary::before {
+  content: "▾ ";
+}
+
+.git-recent .git-log {
+  margin-top: 0.4rem;
+}
+
+/* --- Git tab: quick commit (open file) — deliberately de-emphasized and
+   separated from the branch-aware flow above it (a different mechanism:
+   commits the editor's in-memory buffer directly, see CommitForm.tsx) --- */
+
+.git-quickcommit {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.7rem;
+  opacity: 0.92;
+}
+
+.git-quickcommit-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
 }
 
 /* --- Main pane: fixed Chat tab + file tabs --- */

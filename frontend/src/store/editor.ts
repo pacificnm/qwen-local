@@ -54,7 +54,7 @@ interface EditorState {
   gitLoading: boolean;
   gitError: string | null;
   loadGit: (repoId: string) => Promise<void>;
-  /** Git-tab action in flight: "stage" | "unstage" | "commit" | "push" | null. */
+  /** Git-tab action in flight: "stage" | "unstage" | "commit" | "push" | "branch" | "pr" | "merge" | null. */
   gitBusy: string | null;
   gitNotice: { ok: boolean; text: string } | null;
   clearGitNotice: () => void;
@@ -62,6 +62,9 @@ interface EditorState {
   unstage: (repoId: string, paths: string[]) => Promise<boolean>;
   commitStaged: (repoId: string, message: string) => Promise<boolean>;
   pushBranch: (repoId: string) => Promise<boolean>;
+  createBranch: (repoId: string, name: string) => Promise<boolean>;
+  openPr: (repoId: string, body: api.OpenPrBody) => Promise<boolean>;
+  mergePr: (repoId: string) => Promise<boolean>;
 
   committing: boolean;
   commitError: string | null;
@@ -309,6 +312,48 @@ export const useEditor = create<EditorState>()((set, get) => ({
       return true;
     } catch (e) {
       set({ gitNotice: { ok: false, text: `Push failed: ${errMsg(e)}` }, gitBusy: null });
+      return false;
+    }
+  },
+
+  async createBranch(repoId, name) {
+    if (get().gitBusy) return false;
+    set({ gitBusy: "branch", gitNotice: null });
+    try {
+      const { branch } = await api.createBranch(repoId, name);
+      await get().loadGit(repoId);
+      set({ gitNotice: { ok: true, text: `Switched to new branch ${branch}.` }, gitBusy: null });
+      return true;
+    } catch (e) {
+      set({ gitNotice: { ok: false, text: `Branch creation failed: ${errMsg(e)}` }, gitBusy: null });
+      return false;
+    }
+  },
+
+  async openPr(repoId, body) {
+    if (get().gitBusy) return false;
+    set({ gitBusy: "pr", gitNotice: null });
+    try {
+      await api.openPullRequest(repoId, body);
+      await get().loadGit(repoId);
+      set({ gitNotice: { ok: true, text: "Pull request opened." }, gitBusy: null });
+      return true;
+    } catch (e) {
+      set({ gitNotice: { ok: false, text: `Opening the PR failed: ${errMsg(e)}` }, gitBusy: null });
+      return false;
+    }
+  },
+
+  async mergePr(repoId) {
+    if (get().gitBusy) return false;
+    set({ gitBusy: "merge", gitNotice: null });
+    try {
+      await api.mergePullRequest(repoId);
+      await get().loadGit(repoId);
+      set({ gitNotice: { ok: true, text: "Pull request merged." }, gitBusy: null });
+      return true;
+    } catch (e) {
+      set({ gitNotice: { ok: false, text: `Merge failed: ${errMsg(e)}` }, gitBusy: null });
       return false;
     }
   },

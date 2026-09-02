@@ -2,8 +2,10 @@ import { useEffect } from "react";
 import { useEditor } from "../../store/editor";
 import { useRepos } from "../../store/repos";
 import { CommitForm } from "./CommitForm";
+import { GitBranchBar } from "./GitBranchBar";
 import { GitCommitBox } from "./GitCommitBox";
 import { GitFileRow } from "./GitFileRow";
+import { GitPullRequestBox } from "./GitPullRequestBox";
 import { NoRepoHint } from "./NoRepoHint";
 import { useTabRepoId } from "./useTabRepoId";
 
@@ -16,7 +18,6 @@ export function GitTab() {
   const gitNotice = useEditor((s) => s.gitNotice);
   const stage = useEditor((s) => s.stage);
   const unstage = useEditor((s) => s.unstage);
-  const pushBranch = useEditor((s) => s.pushBranch);
   const commitResult = useEditor((s) => s.commitResult);
   const commitError = useEditor((s) => s.commitError);
   const repos = useRepos((s) => s.repos);
@@ -38,12 +39,14 @@ export function GitTab() {
         <div className="git-head-main">
           <div className="git-repo">{repoName ?? "—"}</div>
           {git && (
-            <div className="git-branchline">
-              <span className="git-branch">● {git.branch || "detached HEAD"}</span>
+            <div className="git-statusline">
               {git.head_sha ? (
                 <code className="git-sha">{git.head_sha.slice(0, 7)}</code>
               ) : (
-                <span className="git-no-commits" title="The remote has no commits yet — stage files and commit below, then push.">
+                <span
+                  className="git-no-commits"
+                  title="The remote has no commits yet — stage files and commit below, then push."
+                >
                   no commits yet
                 </span>
               )}
@@ -80,111 +83,91 @@ export function GitTab() {
 
       {git && (
         <>
-          <div className="git-section">
-            <div className="git-sec-head">
-              <h4 className="git-sec-title">Staged</h4>
-              {git.staged.length > 0 && (
-                <button
-                  type="button"
-                  className="git-sec-action"
-                  disabled={!!gitBusy}
-                  onClick={() =>
-                    void unstage(
-                      repoId,
-                      git.staged.flatMap((f) => (f.old_path ? [f.old_path, f.path] : [f.path])),
-                    )
-                  }
-                >
-                  Unstage all
-                </button>
-              )}
-            </div>
-            {git.staged.length === 0 ? (
-              <p className="dim">Nothing staged — stage files below.</p>
-            ) : (
-              <ul className="git-files">
-                {git.staged.map((f) => (
-                  <GitFileRow
-                    key={`${f.status}:${f.path}`}
-                    entry={f}
-                    action="− Unstage"
-                    disabled={!!gitBusy}
-                    onAction={() =>
-                      void unstage(repoId, f.old_path ? [f.old_path, f.path] : [f.path])
-                    }
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
+          <GitBranchBar repoId={repoId} git={git} />
 
-          <div className="git-section">
-            <div className="git-sec-head">
-              <h4 className="git-sec-title">Changes</h4>
-              {git.changes.length > 0 && (
-                <button
-                  type="button"
-                  className="git-sec-action"
-                  disabled={!!gitBusy}
-                  onClick={() => void stage(repoId, git.changes.map((f) => f.path))}
-                >
-                  Stage all
-                </button>
+          <div className="git-section git-worktree">
+            <h4 className="git-sec-title">Working tree</h4>
+
+            <div className="git-worktree-group">
+              <div className="git-sec-head git-sec-subhead">
+                <span className="git-sec-subtitle">
+                  Staged{git.staged.length > 0 ? ` (${git.staged.length})` : ""}
+                </span>
+                {git.staged.length > 0 && (
+                  <button
+                    type="button"
+                    className="git-sec-action"
+                    disabled={!!gitBusy}
+                    onClick={() =>
+                      void unstage(
+                        repoId,
+                        git.staged.flatMap((f) => (f.old_path ? [f.old_path, f.path] : [f.path])),
+                      )
+                    }
+                  >
+                    Unstage all
+                  </button>
+                )}
+              </div>
+              {git.staged.length === 0 ? (
+                <p className="dim">Nothing staged — stage files below.</p>
+              ) : (
+                <ul className="git-files">
+                  {git.staged.map((f) => (
+                    <GitFileRow
+                      key={`${f.status}:${f.path}`}
+                      entry={f}
+                      action="− Unstage"
+                      disabled={!!gitBusy}
+                      onAction={() =>
+                        void unstage(repoId, f.old_path ? [f.old_path, f.path] : [f.path])
+                      }
+                    />
+                  ))}
+                </ul>
               )}
             </div>
-            {git.changes.length === 0 ? (
-              <p className="dim">No untracked or modified files.</p>
-            ) : (
-              <ul className="git-files">
-                {git.changes.map((f) => (
-                  <GitFileRow
-                    key={`${f.status}:${f.path}`}
-                    entry={f}
-                    action="+ Stage"
+
+            <div className="git-worktree-group">
+              <div className="git-sec-head git-sec-subhead">
+                <span className="git-sec-subtitle">
+                  Changes{git.changes.length > 0 ? ` (${git.changes.length})` : ""}
+                </span>
+                {git.changes.length > 0 && (
+                  <button
+                    type="button"
+                    className="git-sec-action"
                     disabled={!!gitBusy}
-                    onAction={() => void stage(repoId, [f.path])}
-                  />
-                ))}
-              </ul>
-            )}
+                    onClick={() => void stage(repoId, git.changes.map((f) => f.path))}
+                  >
+                    Stage all
+                  </button>
+                )}
+              </div>
+              {git.changes.length === 0 ? (
+                <p className="dim">No untracked or modified files.</p>
+              ) : (
+                <ul className="git-files">
+                  {git.changes.map((f) => (
+                    <GitFileRow
+                      key={`${f.status}:${f.path}`}
+                      entry={f}
+                      action="+ Stage"
+                      disabled={!!gitBusy}
+                      onAction={() => void stage(repoId, [f.path])}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
 
           <GitCommitBox repoId={repoId} stagedCount={git.staged.length} />
 
-          <div className="git-section">
-            <h4 className="git-sec-title">Push</h4>
-            <div className="git-push-row">
-              <div className="git-push-meta">
-                {git.upstream ? (
-                  <>
-                    <code className="git-upstream">{git.upstream}</code>
-                    {git.ahead != null && git.behind != null && (
-                      <span className="git-ab" title="Ahead / behind upstream (refresh to re-fetch)">
-                        {git.ahead > 0 && <span className="git-ab-ahead">↑ {git.ahead}</span>}
-                        {git.behind > 0 && <span className="git-ab-behind">↓ {git.behind}</span>}
-                        {git.ahead === 0 && git.behind === 0 && (
-                          <span className="git-ab-level">up to date</span>
-                        )}
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <span className="dim">no upstream yet — the first push sets it</span>
-                )}
-              </div>
-              <button
-                type="button"
-                className="primary git-push-btn"
-                disabled={!!gitBusy}
-                onClick={() => void pushBranch(repoId)}
-              >
-                {gitBusy === "push" ? "Pushing…" : `Push ${git.branch || "branch"}`}
-              </button>
-            </div>
-          </div>
+          <GitPullRequestBox repoId={repoId} git={git} />
 
-          <div className="git-section">
-            <h4 className="git-sec-title">Recent commits</h4>
+          <details className="git-section git-recent">
+            <summary className="git-sec-title">Recent commits</summary>
             {git.recent.length === 0 ? (
               <p className="dim">No commits yet.</p>
             ) : (
@@ -202,11 +185,21 @@ export function GitTab() {
                 ))}
               </ul>
             )}
-          </div>
+          </details>
         </>
       )}
 
-      {git && <CommitForm repoId={repoId} />}
+      {git && (
+        <div className="git-quickcommit">
+          <h4 className="git-sec-title">Quick commit — open file</h4>
+          <p className="dim git-quickcommit-hint">
+            Publishes the file open in the editor directly, on its own new branch (with an
+            optional PR) — independent of staging above. Use this for a one-off edit; use the
+            branch workflow above for anything you'll keep working on.
+          </p>
+          <CommitForm repoId={repoId} />
+        </div>
+      )}
       {!git && !gitError && (
         <div className="commit-card">
           <p className="dim">Git state is required to commit (the sync clone must exist).</p>

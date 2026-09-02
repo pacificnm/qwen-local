@@ -302,9 +302,16 @@ export interface GitLogEntry {
   subject: string;
 }
 
+export interface GitPrInfo {
+  number: number;
+  url: string;
+  title?: string;
+}
+
 export interface GitState {
   repo_id: string;
   branch: string;
+  default_branch: string;
   has_commits: boolean;
   head_sha: string;
   upstream: string | null;
@@ -314,6 +321,7 @@ export interface GitState {
   changes: GitFileEntry[];
   dirty: GitDirtyEntry[];
   recent: GitLogEntry[];
+  pr: GitPrInfo | null;
 }
 
 export async function getRepoGit(repoId: string): Promise<GitState> {
@@ -358,6 +366,41 @@ export async function pushBranch(repoId: string): Promise<{ branch: string; outp
     headers: { "Content-Type": "application/json" },
   });
   return handle<{ branch: string; output: string }>(res);
+}
+
+export async function createBranch(repoId: string, name: string): Promise<{ branch: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git/branch`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  return handle<{ branch: string }>(res);
+}
+
+export interface OpenPrBody {
+  title: string;
+  body?: string;
+  issue_number?: number;
+}
+
+export async function openPullRequest(repoId: string, body: OpenPrBody): Promise<GitPrInfo> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git/pr`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handle<GitPrInfo>(res);
+}
+
+export async function mergePullRequest(repoId: string): Promise<{ merged: boolean; sha: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git/pr/merge`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+  });
+  return handle<{ merged: boolean; sha: string }>(res);
 }
 
 export interface CommitBody {

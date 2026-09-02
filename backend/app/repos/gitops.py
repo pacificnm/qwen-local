@@ -410,6 +410,25 @@ async def _create_branch(repo_dir: Path, pat: str, branch: str) -> str:
     return name
 
 
+async def create_branch(repo_dir: Path, full_name: str, pat: str, name: str) -> str:
+    """Create and check out `name` from the current HEAD.
+
+    Unlike `_create_branch` (used by the automated `commit_file`/
+    `commit_workspace` flows, which silently suffixes a colliding name), this
+    is for a user typing an exact branch name in the Git tab — a collision
+    should be a clear error, not a silently different branch.
+    """
+    if not is_valid_branch(name):
+        raise InvalidBranch("branch name is not a valid git ref name")
+    async with _lock_for(full_name):
+        if await _local_ref_exists(repo_dir, f"refs/heads/{name}"):
+            raise GitError(f"branch '{name}' already exists locally")
+        if await _remote_branch_exists(repo_dir, pat, name):
+            raise GitError(f"branch '{name}' already exists on the remote")
+        await _run(["git", "checkout", "-b", name], pat=pat, cwd=str(repo_dir))
+    return name
+
+
 async def _post_json(url: str, headers: dict, payload: dict) -> tuple[int, dict]:
     """Small GitHub REST helper (module-level so tests can monkeypatch it)."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
@@ -421,6 +440,51 @@ async def _post_json(url: str, headers: dict, payload: dict) -> tuple[int, dict]
     return resp.status_code, data if isinstance(data, dict) else {"message": str(data)}
 
 
+async def _get_json(url: str, headers: dict) -> tuple[int, object]:
+    """GET sibling of `_post_json`. GitHub list endpoints (e.g. `/pulls`) return
+    a JSON array, so unlike `_post_json` this does NOT coerce to a dict."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        resp = await client.get(url, headers=headers)
+    try:
+        data = resp.json()
+    except ValueError:
+        data = None
+    return resp.status_code, data
+
+
+async def _put_json(url: str, headers: dict, payload: dict) -> tuple[int, dict]:
+    """PUT sibling of `_post_json` (used for the merge endpoint)."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        resp = await client.put(url, headers=headers, json=payload)
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    return resp.status_code, data if isinstance(data, dict) else {"message": str(data)}
+
+
+def _github_headers(pat: str) -> dict:
+    return {
+        "Authorization": f"token {pat}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+async def _open_pr(full_name: str, pat: str, title: str, body: str, head: str, base: str) -> dict:
+    """POST a new PR; returns GitHub's raw parsed response body."""
+    status, data = await _post_json(
+        f"https://api.github.com/repos/{full_name}/pulls",
+        _github_headers(pat),
+        {"title": title, "body": body, "head": head, "base": base},
+    )
+    if status != 201:
+        raise GithubApiError(f"GitHub PR creation failed ({status}): {data.get('message', 'unknown error')}")
+    if not data.get("html_url") or not isinstance(data.get("number"), int):
+        raise GithubApiError("GitHub did not return a PR URL/number")
+    return data
+
+
 async def open_pull_request(
     full_name: str,
     pat: str,
@@ -429,21 +493,45 @@ async def open_pull_request(
     head: str,
     base: str,
 ) -> str:
-    status, data = await _post_json(
-        f"https://api.github.com/repos/{full_name}/pulls",
-        {
-            "Authorization": f"token {pat}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-        {"title": title, "body": body, "head": head, "base": base},
+    data = await _open_pr(full_name, pat, title, body, head, base)
+    return str(data["html_url"])
+
+
+async def open_branch_pull_request(
+    full_name: str,
+    pat: str,
+    branch: str,
+    base: str,
+    title: str,
+    body: str,
+    issue_number: int | None,
+) -> dict:
+    """Like `open_pull_request`, but for the Git tab's working-tree flow: takes
+    a branch (not a single-file commit result) and appends `Closes #N` to the
+    body when `issue_number` is given, returning both the PR number and URL
+    (merge needs the number)."""
+    final_body = body or ""
+    if issue_number is not None and f"#{issue_number}" not in final_body:
+        closes = f"Closes #{issue_number}"
+        final_body = f"{final_body}\n\n{closes}" if final_body.strip() else closes
+    data = await _open_pr(full_name, pat, title, final_body, branch, base)
+    return {"number": data["number"], "url": str(data["html_url"])}
+
+
+async def find_open_pr(full_name: str, pat: str, branch: str) -> dict | None:
+    """The open PR (if any) whose head is `branch`. `None` when there is none."""
+    owner = full_name.split("/", 1)[0]
+    status, data = await _get_json(
+        f"https://api.github.com/repos/{full_name}/pulls?head={owner}:{branch}&state=open",
+        _github_headers(pat),
     )
-    if status != 201:
-        raise GithubApiError(f"GitHub PR creation failed ({status}): {data.get('message', 'unknown error')}")
-    url = data.get("html_url")
-    if not url:
-        raise GithubApiError("GitHub did not return a PR URL")
-    return str(url)
+    if status != 200:
+        msg = data.get("message", "unknown error") if isinstance(data, dict) else "unknown error"
+        raise GithubApiError(f"GitHub PR lookup failed ({status}): {msg}")
+    if not isinstance(data, list) or not data:
+        return None
+    pr = data[0]
+    return {"number": pr.get("number"), "url": pr.get("html_url"), "title": pr.get("title")}
 
 
 async def commit_file(
@@ -665,3 +753,50 @@ async def push_branch(repo_dir: Path, full_name: str, pat: str) -> dict:
         except GitError:
             pass
     return {"branch": branch, "output": out.strip()}
+
+
+async def merge_pull_request(
+    repo_dir: Path,
+    full_name: str,
+    pat: str,
+    branch: str,
+    pr_number: int,
+    default_branch: str,
+) -> dict:
+    """Squash-merge `pr_number`, delete the now-merged remote branch, and
+    check the local clone back onto `default_branch` (fast-forwarded so the
+    Git tab reads "up to date" right away). Raises GithubApiError on failure
+    (e.g. merge conflicts) — no conflict resolution is attempted.
+
+    Branch deletion + the local checkout-back are best-effort: the merge
+    itself already landed on GitHub by the time either could fail, so a
+    failure there must not be reported as the merge having failed.
+    """
+    async with _lock_for(full_name):
+        status, data = await _put_json(
+            f"https://api.github.com/repos/{full_name}/pulls/{pr_number}/merge",
+            _github_headers(pat),
+            {"merge_method": "squash"},
+        )
+        if status != 200 or not data.get("merged"):
+            raise GithubApiError(f"GitHub merge failed ({status}): {data.get('message', 'unknown error')}")
+        sha = str(data.get("sha") or "")
+
+        try:
+            await _run(["git", "push", "origin", "--delete", branch], pat=pat, cwd=str(repo_dir))
+        except GitError:
+            pass
+
+        if default_branch and default_branch != "HEAD" and default_branch != branch:
+            try:
+                await _run(["git", "checkout", "-f", default_branch], pat=pat, cwd=str(repo_dir))
+                await _run(["git", "fetch", "origin", default_branch], pat=pat, cwd=str(repo_dir))
+                await _run(
+                    ["git", "merge", "--ff-only", f"origin/{default_branch}"],
+                    pat=pat,
+                    cwd=str(repo_dir),
+                )
+            except GitError:
+                pass
+
+    return {"merged": True, "sha": sha}
