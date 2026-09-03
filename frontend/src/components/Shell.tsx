@@ -189,9 +189,6 @@ export default function Shell() {
               </>
             )}
           </div>
-          {activeProject && (
-            <ProjectSettings projectId={activeProject.id} projectName={activeProject.name} />
-          )}
         </nav>
 
         {resizer("left")}
@@ -204,6 +201,10 @@ export default function Shell() {
           <EditorPane />
         </aside>
       </div>
+
+      {activeProject && (
+        <ProjectSettings projectId={activeProject.id} projectName={activeProject.name} />
+      )}
     </div>
   );
 }

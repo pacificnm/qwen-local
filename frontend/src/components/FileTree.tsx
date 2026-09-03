@@ -5,7 +5,6 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import "@vscode/codicons/dist/codicon.css";
 import { fileIconFor } from "../lib/fileIcons";
 import {
   createRepoDir,

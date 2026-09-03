@@ -8,7 +8,7 @@ const STATE_LABEL: Record<TermStatus, string> = {
   closed: "closed",
 };
 
-/** Bottom-left terminal launcher: icon + live status. Click to
+/** Status-bar terminal launcher: icon + live status. Click to
  *  open/close the shell (rendered in the center pane by `TerminalDock`). */
 export default function TerminalLauncher() {
   const open = useTerminalUI((s) => s.open);
@@ -24,9 +24,7 @@ export default function TerminalLauncher() {
       title={open ? "Close terminal" : "Open terminal"}
       onClick={() => setOpen(!open)}
     >
-      <span className="term-launch-ico" aria-hidden>
-        ▣
-      </span>
+      <i className="codicon codicon-terminal term-launch-ico" aria-hidden="true" />
       <span className={`term-launch-status tdock-status tdock-status--${status}`}>
         {STATE_LABEL[status]}
       </span>
