@@ -1522,6 +1522,35 @@ body.pane-dragging .pane-resizer::after {
   font-size: 0.82rem;
 }
 
+.git-branch-dot {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+.git-branch-select {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.05rem 0.25rem;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-branch-select:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--bg-panel);
+}
+
+.git-branch-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .git-sha {
   font-size: 0.78rem;
   color: var(--text-dim);

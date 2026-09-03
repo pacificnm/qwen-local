@@ -193,14 +193,26 @@ async def repo_git_state(
         raise HTTPException(status_code=502, detail=f"git state unavailable: {exc}") from exc
 
     pr = None
+    branches: list[dict] = []
     pat = get_settings().github_pat
     if pat and state["branch"] and state["branch"] != repo.default_branch:
         try:
             pr = await gitops.find_open_pr(repo.github_full_name, pat, state["branch"])
         except GithubApiError:
             pr = None  # best-effort — a flaky GitHub call must not sink the whole snapshot
+    if pat:
+        try:
+            branches = await gitops.list_branches(repo.github_full_name, pat)
+        except GithubApiError:
+            branches = []  # same best-effort posture as the PR lookup above
 
-    return {"repo_id": str(repo.id), "default_branch": repo.default_branch, "pr": pr, **state}
+    return {
+        "repo_id": str(repo.id),
+        "default_branch": repo.default_branch,
+        "pr": pr,
+        "branches": branches,
+        **state,
+    }
 
 
 class GitPathsIn(BaseModel):
@@ -310,6 +322,34 @@ async def git_create_branch(
         raise HTTPException(status_code=503, detail="GitHub PAT is not configured")
     try:
         branch = await gitops.create_branch(repo_dir, repo.github_full_name, pat, body.name.strip())
+    except InvalidBranch as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"repo_id": str(repo.id), "branch": branch}
+
+
+class GitCheckoutIn(BaseModel):
+    branch: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/repos/{repo_id}/git/checkout")
+async def git_checkout_branch(
+    repo_id: uuid.UUID,
+    body: GitCheckoutIn,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Check out an existing branch — local, or fetched from the remote on
+    demand if it isn't (see gitops.switch_branch). Refuses on a dirty
+    worktree rather than risking a silent discard."""
+    repo = await _get_repo(db, repo_id)
+    repo_dir = _worktree(repo)
+    pat = get_settings().github_pat
+    if not pat:
+        raise HTTPException(status_code=503, detail="GitHub PAT is not configured")
+    try:
+        branch = await gitops.switch_branch(repo_dir, repo.github_full_name, pat, body.branch.strip())
     except InvalidBranch as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except GitError as exc:

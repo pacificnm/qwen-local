@@ -8,6 +8,7 @@ import { useEditor } from "../../store/editor";
 export function GitBranchBar({ repoId, git }: { repoId: string; git: GitState }) {
   const gitBusy = useEditor((s) => s.gitBusy);
   const createBranch = useEditor((s) => s.createBranch);
+  const switchBranch = useEditor((s) => s.switchBranch);
   const pushBranch = useEditor((s) => s.pushBranch);
   const pendingBranchIssue = useEditor((s) => s.pendingBranchIssue);
   const setPendingBranchIssue = useEditor((s) => s.setPendingBranchIssue);
@@ -38,6 +39,18 @@ export function GitBranchBar({ repoId, git }: { repoId: string; git: GitState })
       ? `Already up to date with ${git.upstream}`
       : undefined;
 
+  // Dirty tree blocks a switch server-side too (see gitops.switch_branch) —
+  // disabling here avoids a round trip that would just come back as an error.
+  const dirty = git.staged.length > 0 || git.changes.length > 0;
+  const branchSwitchTitle = dirty
+    ? "Commit or discard your changes before switching branches"
+    : "Switch branch";
+  // Always include the current branch even if it's local-only and not (yet)
+  // in the fetched GitHub list — e.g. just created here, not pushed yet.
+  const branchOptions = git.branches.some((b) => b.name === git.branch)
+    ? git.branches
+    : [{ name: git.branch, sha: git.head_sha }, ...git.branches];
+
   function cancelCreate() {
     setCreating(false);
     setIssueNumber("");
@@ -48,7 +61,24 @@ export function GitBranchBar({ repoId, git }: { repoId: string; git: GitState })
     <div className="git-branchbar">
       <div className="git-push-row">
         <div className="git-push-meta">
-          <span className="git-branch">● {git.branch || "detached HEAD"}</span>
+          <span className="git-branch-dot" aria-hidden>●</span>
+          {git.branch ? (
+            <select
+              className="git-branch-select"
+              value={git.branch}
+              disabled={!!gitBusy || dirty}
+              title={branchSwitchTitle}
+              onChange={(e) => void switchBranch(repoId, e.target.value)}
+            >
+              {branchOptions.map((b) => (
+                <option key={b.name} value={b.name}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="git-branch">detached HEAD</span>
+          )}
           {git.upstream ? (
             <>
               <code className="git-upstream">{git.upstream}</code>

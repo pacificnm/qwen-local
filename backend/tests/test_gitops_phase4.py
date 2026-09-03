@@ -188,6 +188,121 @@ async def test_create_branch_rejects_invalid_name(tmp_path):
         await gitops.create_branch(ws / "o__r", "o/r", "", "-leading-dash")
 
 
+# --- switch_branch (Git-tab flow: switch to an EXISTING branch) --------------
+
+
+async def test_switch_branch_checks_out_existing_local_branch(tmp_path):
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    _make_upstream_with_clone(upstream, ws / "o__r")
+    clone = ws / "o__r"
+    _git(clone, "checkout", "-q", "-b", "feature")
+    _git(clone, "checkout", "-q", "main")
+
+    branch = await gitops.switch_branch(clone, "o/r", "", "feature")
+    assert branch == "feature"
+    assert _git(clone, "branch", "--show-current") == "feature"
+
+
+async def test_switch_branch_fetches_remote_only_branch(tmp_path):
+    """Shallow single-branch clones only know the default branch locally —
+    switching to one that exists on the remote but was never fetched must
+    fetch it first, then check it out."""
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    _make_upstream_with_clone(upstream, ws / "o__r")
+    clone = ws / "o__r"
+    # Created directly on the "remote" (upstream), never touched by the clone.
+    _git(upstream, "checkout", "-q", "-b", "teammate-branch")
+    (upstream / "teammate.txt").write_text("from a teammate\n")
+    _git(upstream, "add", "teammate.txt")
+    _git(upstream, "commit", "-q", "-m", "teammate work")
+    _git(upstream, "checkout", "-q", "main")
+    assert not await gitops._local_ref_exists(clone, "refs/heads/teammate-branch")
+
+    branch = await gitops.switch_branch(clone, "o/r", "", "teammate-branch")
+
+    assert branch == "teammate-branch"
+    assert _git(clone, "branch", "--show-current") == "teammate-branch"
+    assert (clone / "teammate.txt").read_text() == "from a teammate\n"
+
+
+async def test_switch_branch_rejects_dirty_tree(tmp_path):
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    _make_upstream_with_clone(upstream, ws / "o__r")
+    clone = ws / "o__r"
+    _git(clone, "checkout", "-q", "-b", "feature")
+    _git(clone, "checkout", "-q", "main")
+    (clone / "hello.txt").write_text("uncommitted edit\n")  # dirty the worktree
+
+    with pytest.raises(GitError, match="commit or discard"):
+        await gitops.switch_branch(clone, "o/r", "", "feature")
+    # Blocked — still on main, edit untouched.
+    assert _git(clone, "branch", "--show-current") == "main"
+    assert (clone / "hello.txt").read_text() == "uncommitted edit\n"
+
+
+async def test_switch_branch_noop_when_already_current(monkeypatch):
+    """Switching to the branch you're already on is a no-op — must not be
+    blocked by a dirty tree, since nothing actually moves."""
+    async def fake_run(args, pat, cwd=None, env_extra=None):
+        assert args[:2] == ["git", "branch"], f"only the current-branch check should run: {args}"
+        return "main\n"
+
+    monkeypatch.setattr(gitops, "_run", fake_run)
+    branch = await gitops.switch_branch(Path("/unused"), "o/r", "", "main")
+    assert branch == "main"
+
+
+async def test_switch_branch_rejects_unknown_branch(tmp_path):
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    _make_upstream_with_clone(upstream, ws / "o__r")
+    clone = ws / "o__r"
+
+    with pytest.raises(GitError, match="not found"):
+        await gitops.switch_branch(clone, "o/r", "", "does-not-exist-anywhere")
+    assert _git(clone, "branch", "--show-current") == "main"
+
+
+async def test_switch_branch_rejects_invalid_name(tmp_path):
+    ws = tmp_path / "ws"
+    upstream = tmp_path / "upstream"
+    _make_upstream_with_clone(upstream, ws / "o__r")
+
+    with pytest.raises(InvalidBranch):
+        await gitops.switch_branch(ws / "o__r", "o/r", "", "-leading-dash")
+
+
+# --- list_branches (Git-tab branch picker; monkeypatched transport) ----------
+
+
+async def test_list_branches_returns_names_and_shas(monkeypatch):
+    async def fake_get(url, headers):
+        assert "per_page=100" in url
+        return 200, [
+            {"name": "main", "commit": {"sha": "a" * 40}},
+            {"name": "feature", "commit": {"sha": "b" * 40}},
+        ], {}
+
+    monkeypatch.setattr(gitops, "get_json", fake_get)
+    branches = await gitops.list_branches("o/r", "pat")
+    assert branches == [
+        {"name": "main", "sha": "a" * 40},
+        {"name": "feature", "sha": "b" * 40},
+    ]
+
+
+async def test_list_branches_raises_on_error_status(monkeypatch):
+    async def fake_get(url, headers):
+        return 404, {"message": "Not Found"}, {}
+
+    monkeypatch.setattr(gitops, "get_json", fake_get)
+    with pytest.raises(GithubApiError):
+        await gitops.list_branches("o/r", "pat")
+
+
 # --- merge_pull_request (Git-tab flow) ---------------------------------------
 
 

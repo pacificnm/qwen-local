@@ -314,6 +314,11 @@ export interface GitPrInfo {
   title?: string;
 }
 
+export interface GitBranchInfo {
+  name: string;
+  sha: string;
+}
+
 export interface GitState {
   repo_id: string;
   branch: string;
@@ -328,6 +333,7 @@ export interface GitState {
   dirty: GitDirtyEntry[];
   recent: GitLogEntry[];
   pr: GitPrInfo | null;
+  branches: GitBranchInfo[];
 }
 
 export async function getRepoGit(repoId: string): Promise<GitState> {
@@ -380,6 +386,16 @@ export async function createBranch(repoId: string, name: string): Promise<{ bran
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
+  });
+  return handle<{ branch: string }>(res);
+}
+
+export async function checkoutBranch(repoId: string, branch: string): Promise<{ branch: string }> {
+  const res = await fetch(`${BASE}/repos/${repoId}/git/checkout`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ branch }),
   });
   return handle<{ branch: string }>(res);
 }

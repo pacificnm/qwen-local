@@ -58,7 +58,7 @@ interface EditorState {
   gitLoading: boolean;
   gitError: string | null;
   loadGit: (repoId: string) => Promise<void>;
-  /** Git-tab action in flight: "stage" | "unstage" | "commit" | "push" | "branch" | "pr" | "merge" | null. */
+  /** Git-tab action in flight: "stage" | "unstage" | "commit" | "push" | "branch" | "checkout" | "pr" | "merge" | null. */
   gitBusy: string | null;
   gitNotice: { ok: boolean; text: string } | null;
   clearGitNotice: () => void;
@@ -67,6 +67,7 @@ interface EditorState {
   commitStaged: (repoId: string, message: string) => Promise<boolean>;
   pushBranch: (repoId: string) => Promise<boolean>;
   createBranch: (repoId: string, name: string) => Promise<boolean>;
+  switchBranch: (repoId: string, branch: string) => Promise<boolean>;
   openPr: (repoId: string, body: api.OpenPrBody) => Promise<boolean>;
   mergePr: (repoId: string) => Promise<boolean>;
 
@@ -311,6 +312,20 @@ export const useEditor = create<EditorState>()((set, get) => ({
       return true;
     } catch (e) {
       set({ gitNotice: { ok: false, text: `Branch creation failed: ${errMsg(e)}` }, gitBusy: null });
+      return false;
+    }
+  },
+
+  async switchBranch(repoId, branch) {
+    if (get().gitBusy) return false;
+    set({ gitBusy: "checkout", gitNotice: null });
+    try {
+      const { branch: switched } = await api.checkoutBranch(repoId, branch);
+      await get().loadGit(repoId);
+      set({ gitNotice: { ok: true, text: `Switched to ${switched}.` }, gitBusy: null });
+      return true;
+    } catch (e) {
+      set({ gitNotice: { ok: false, text: `Switch failed: ${errMsg(e)}` }, gitBusy: null });
       return false;
     }
   },

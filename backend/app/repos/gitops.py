@@ -426,6 +426,56 @@ async def create_branch(repo_dir: Path, full_name: str, pat: str, name: str) -> 
             raise GitError(f"branch '{name}' already exists on the remote")
         await _run(["git", "checkout", "-b", name], pat=pat, cwd=str(repo_dir))
     return name
+
+
+async def switch_branch(repo_dir: Path, full_name: str, pat: str, branch: str) -> str:
+    """Check out an EXISTING branch — local, or on the remote but not yet
+    fetched (repos are cloned shallow/single-branch, so most branches other
+    than the default are remote-only until switched to at least once).
+
+    Refuses when the worktree is dirty: unlike `create_branch` (always
+    branches from current HEAD, so nothing can conflict), this moves between
+    two unrelated branches, where a force checkout could silently discard
+    real uncommitted work — so this raises instead, same as real git's
+    non-force default.
+    """
+    if not is_valid_branch(branch):
+        raise InvalidBranch("branch name is not a valid git ref name")
+    async with _lock_for(full_name):
+        current = (await _run(["git", "branch", "--show-current"], pat="", cwd=str(repo_dir))).strip()
+        if current == branch:
+            return branch
+        status = await _run(["git", "status", "--porcelain"], pat="", cwd=str(repo_dir))
+        if status.strip():
+            raise GitError("commit or discard your changes before switching branches")
+        if await _local_ref_exists(repo_dir, f"refs/heads/{branch}"):
+            await _run(["git", "checkout", branch], pat="", cwd=str(repo_dir))
+        elif await _remote_branch_exists(repo_dir, pat, branch):
+            await _run(
+                ["git", "fetch", "--depth", "1", "origin", f"{branch}:{branch}"],
+                pat=pat,
+                cwd=str(repo_dir),
+            )
+            await _run(["git", "checkout", branch], pat="", cwd=str(repo_dir))
+        else:
+            raise GitError(f"branch '{branch}' not found locally or on the remote")
+    return branch
+
+
+async def list_branches(full_name: str, pat: str) -> list[dict]:
+    """Branches on the GitHub remote — the source of truth for "what branches
+    exist", since a shallow single-branch clone only ever has the default
+    branch (plus whatever's been created/switched to locally so far)."""
+    status, data, _headers = await get_json(
+        f"https://api.github.com/repos/{full_name}/branches?per_page=100",
+        github_headers(pat),
+    )
+    if status != 200:
+        msg = data.get("message", "unknown error") if isinstance(data, dict) else "unknown error"
+        raise GithubApiError(f"GitHub branch list failed ({status}): {msg}")
+    return [{"name": b["name"], "sha": b["commit"]["sha"]} for b in data]
+
+
 async def _open_pr(full_name: str, pat: str, title: str, body: str, head: str, base: str) -> dict:
     """POST a new PR; returns GitHub's raw parsed response body."""
     status, data = await post_json(
