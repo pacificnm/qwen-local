@@ -1418,45 +1418,61 @@ body.pane-dragging .pane-resizer::after {
   outline: none;
 }
 
-/* Right-click context menu on a tree row */
+/* Right-click context menu on a tree row — matches Monaco's own native
+   right-click menu (MainPane.tsx's editor.addAction items) pixel-for-pixel,
+   so both menus read as one consistent "app menu" rather than two different
+   widgets: same background/foreground/selection colors, row height, padding,
+   separators, and shadow (measured from the live Monaco menu's computed
+   styles — VS Code's default dark theme menu palette). */
 .ctxmenu {
   position: fixed;
   z-index: 60;
   min-width: 190px;
+  max-width: 320px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 0.3rem;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  padding: 4px;
+  background: #3c3c3c;
+  border: 0;
+  border-radius: 0;
+  box-shadow: 0 0 12px rgb(0 0 0 / 0.36);
 }
 
 .ctxmenu-item {
-  padding: 0.34rem 0.7rem;
-  font-size: 0.83rem;
+  height: 24px;
+  padding: 0 12px;
+  font-size: 13px;
   font-family: inherit;
-  color: var(--text-dim);
+  line-height: 24px;
+  color: #f0f0f0;
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ctxmenu-item:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: #ffffff;
+  background: #04395e;
 }
 
 .ctxmenu-item.danger {
-  color: #e57373;
+  color: #f14c4c;
 }
 
 .ctxmenu-item.danger:hover {
-  color: #ff9e9e;
-  background: color-mix(in srgb, #e5484d 18%, transparent);
+  color: #ffffff;
+  background: #a1260d;
+}
+
+.ctxmenu-sep {
+  height: 0;
+  margin: 5px 8px;
+  border-top: 1px solid rgb(204 204 204 / 0.2);
 }
 
 /* --- Git tab --- */

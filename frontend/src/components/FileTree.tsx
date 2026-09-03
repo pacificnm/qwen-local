@@ -28,6 +28,7 @@ type Node =
 type MenuState = { x: number; y: number; path: string; kind: "file" | "dir" };
 type Renaming = { path: string; value: string };
 type MenuItem = { label: string; danger?: boolean; action: () => void };
+type MenuEntry = MenuItem | { sep: true };
 
 function parentDirOf(path: string): string {
   const i = path.lastIndexOf("/");
@@ -374,7 +375,7 @@ export default function FileTree({ repoId }: { repoId: string }) {
     setRenaming(null);
     // Keep the menu fully on-screen.
     const x = Math.max(8, Math.min(e.clientX, window.innerWidth - 218));
-    const y = Math.max(8, Math.min(e.clientY, window.innerHeight - 300));
+    const y = Math.max(8, Math.min(e.clientY, window.innerHeight - 340));
     setMenu({ x, y, path, kind });
   };
 
@@ -521,32 +522,44 @@ export default function FileTree({ repoId }: { repoId: string }) {
     })();
   };
 
-  const buildMenuItems = (m: MenuState): MenuItem[] => {
+  // Grouped VS Code Explorer-style: Open → New → Copy/Paste → Copy Path(s) →
+  // Rename/Delete → app-specific (Add to Chat) — matches the ordering/section
+  // breaks of the editor's own right-click menu (MainPane.tsx).
+  const buildMenuItems = (m: MenuState): MenuEntry[] => {
     if (m.kind === "file") {
       const parent = parentDirOf(m.path);
       return [
         { label: "Open", action: () => onPick(m.path) },
+        { sep: true },
         { label: "New File", action: () => doNewFile(parent) },
         { label: "New Folder", action: () => doNewFolder(parent) },
-        { label: "Rename", action: () => startRename(m.path) },
-        { label: "Delete", danger: true, action: () => doDelete(m.path, "file") },
+        { sep: true },
         { label: "Copy", action: () => doCopyFile(m.path) },
         { label: "Paste", action: () => doPaste(parent) },
+        { sep: true },
         { label: "Copy Path", action: () => copyPath(m.path) },
         { label: "Copy Relative Path", action: () => copyRel(m.path) },
+        { sep: true },
+        { label: "Rename", action: () => startRename(m.path) },
+        { label: "Delete", danger: true, action: () => doDelete(m.path, "file") },
+        { sep: true },
         { label: "Add to Chat", action: () => addFileToChat(m.path) },
       ];
     }
     const open = effExpanded.has(m.path);
     return [
       { label: open ? "Close" : "Open", action: () => onToggle(m.path) },
+      { sep: true },
       { label: "New File", action: () => doNewFile(m.path) },
       { label: "New Folder", action: () => doNewFolder(m.path) },
-      { label: "Rename", action: () => startRename(m.path) },
-      { label: "Delete", danger: true, action: () => doDelete(m.path, "dir") },
+      { sep: true },
       { label: "Paste", action: () => doPaste(m.path) },
+      { sep: true },
       { label: "Copy Path", action: () => copyPath(m.path) },
       { label: "Copy Relative Path", action: () => copyRel(m.path) },
+      { sep: true },
+      { label: "Rename", action: () => startRename(m.path) },
+      { label: "Delete", danger: true, action: () => doDelete(m.path, "dir") },
     ];
   };
 
@@ -604,20 +617,24 @@ export default function FileTree({ repoId }: { repoId: string }) {
           role="menu"
           aria-label="File actions"
         >
-          {buildMenuItems(menu).map((it) => (
-            <button
-              key={it.label}
-              type="button"
-              role="menuitem"
-              className={it.danger ? "ctxmenu-item danger" : "ctxmenu-item"}
-              onClick={() => {
-                setMenu(null);
-                void it.action();
-              }}
-            >
-              {it.label}
-            </button>
-          ))}
+          {buildMenuItems(menu).map((it, i) =>
+            "sep" in it ? (
+              <div key={`sep-${i}`} className="ctxmenu-sep" role="separator" />
+            ) : (
+              <button
+                key={it.label}
+                type="button"
+                role="menuitem"
+                className={it.danger ? "ctxmenu-item danger" : "ctxmenu-item"}
+                onClick={() => {
+                  setMenu(null);
+                  void it.action();
+                }}
+              >
+                {it.label}
+              </button>
+            ),
+          )}
         </div>
       )}
     </div>
