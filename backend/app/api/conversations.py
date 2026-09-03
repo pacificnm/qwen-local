@@ -11,7 +11,6 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
-from app.core.settings import get_settings
 from app.db.models import Conversation, Message, Project, Repository, User
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -38,11 +37,6 @@ class NoteIn(BaseModel):
 
     text: str = Field(min_length=1, max_length=4000)
     tool: dict | None = None
-
-
-def _known_models() -> set[str]:
-    s = get_settings()
-    return {s.ollama_fast_model, s.ollama_strong_model}
 
 
 def _conv_out(c: Conversation, repo: Repository | None = None) -> dict:
@@ -115,8 +109,8 @@ async def create_conversation(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if body.model_default is not None and body.model_default not in _known_models():
-        raise HTTPException(status_code=422, detail="unknown model")
+    if body.model_default is not None and not body.model_default.strip():
+        raise HTTPException(status_code=422, detail="model_default must not be blank")
     project = await db.get(Project, body.project_id)
     if project is None or project.user_id != user.id:
         raise HTTPException(status_code=404, detail="Project not found")

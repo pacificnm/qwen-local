@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_fast_model: str = "qwen3.5:4b-compress"
     ollama_strong_model: str = "qwen3.8:27b-longctx"
+    ollama_compaction_model: str = "qwen3.5:4b-compress"
     ollama_embed_model: str = "nomic-embed-text"
     ollama_keep_alive: str = "60s"
 

@@ -156,16 +156,33 @@ async def main() -> None:
         await conn.execute(text("ALTER TABLE conversations DROP COLUMN IF EXISTS repo_id"))
     print("✓ projects migration applied (idempotent)")
 
-    # 2c) ProjectSettings backfill — step 2's create_all already built the new
-    #  project_settings table on an existing DB; give every pre-existing project
-    #  a default settings row (sandbox ports, RAG knobs, MCP list) so per-project
-    #  config works out of the box. Idempotent: the NOT EXISTS guard skips projects
+    # 2c) ProjectSettings model-role columns (idempotent), added BEFORE the
+    #  row-backfill below so its INSERT can reference them. `model_default`
+    #  becomes `coding_model` (its data is carried forward, once existing rows
+    #  exist to carry it — see the backfill/DROP after 2d); `fast_chat_model`
+    #  and `compaction_model` are new. create_all already adds the new columns
+    #  on a fresh DB; on an existing DB this ALTER carries the live upgrade —
+    #  mirrors the repo_id -> project_id migration above.
+    MIGRATE_PROJECT_SETTINGS_MODELS = [
+        "ALTER TABLE project_settings ADD COLUMN IF NOT EXISTS coding_model VARCHAR(64)",
+        "ALTER TABLE project_settings ADD COLUMN IF NOT EXISTS fast_chat_model VARCHAR(64)",
+        "ALTER TABLE project_settings ADD COLUMN IF NOT EXISTS compaction_model VARCHAR(64)",
+    ]
+    for ddl in MIGRATE_PROJECT_SETTINGS_MODELS:
+        async with engine.begin() as conn:
+            await conn.execute(text(ddl))
+    print("✓ project_settings model-role columns added (idempotent)")
+
+    # 2d) ProjectSettings backfill — give every pre-existing project a default
+    #  settings row (sandbox ports, RAG knobs, MCP list) so per-project config
+    #  works out of the box. Idempotent: the NOT EXISTS guard skips projects
     #  that already have a row, so re-runs add nothing.
     MIGRATE_PROJECT_SETTINGS = [
         "INSERT INTO project_settings "
         "(id, project_id, sandbox_port, sandbox_container_port, rag_top_k, "
-        " rag_max_chars, mcp_servers, model_default, created_at, updated_at) "
-        "SELECT gen_random_uuid(), p.id, 9000, 80, 8, 12000, NULL, NULL, now(), now() "
+        " rag_max_chars, mcp_servers, coding_model, fast_chat_model, compaction_model, "
+        " created_at, updated_at) "
+        "SELECT gen_random_uuid(), p.id, 9000, 80, 8, 12000, NULL, NULL, NULL, NULL, now(), now() "
         "FROM projects p "
         "WHERE NOT EXISTS (SELECT 1 FROM project_settings ps WHERE ps.project_id = p.id)",
     ]
@@ -173,6 +190,37 @@ async def main() -> None:
         async with engine.begin() as conn:
             await conn.execute(text(ddl))
     print("✓ project_settings backfilled for existing projects (idempotent)")
+
+    # 2e) Carry model_default's data forward into coding_model, then drop the
+    #  legacy column, now that both columns exist on every row.
+    async with engine.begin() as conn:
+        has_legacy_model_default = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'project_settings' AND column_name = 'model_default'"
+                )
+            )
+        ).scalar_one_or_none()
+        if has_legacy_model_default:
+            await conn.execute(
+                text(
+                    "UPDATE project_settings SET coding_model = model_default "
+                    "WHERE coding_model IS NULL AND model_default IS NOT NULL"
+                )
+            )
+            await conn.execute(text("ALTER TABLE project_settings DROP COLUMN IF EXISTS model_default"))
+    print("✓ project_settings model_default backfilled into coding_model and dropped (idempotent)")
+
+    # 2f) Conversation rolling-compaction columns (idempotent).
+    MIGRATE_CONVERSATIONS_COMPACTION = [
+        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS context_summary TEXT",
+        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS context_summary_through_seq INTEGER",
+    ]
+    for ddl in MIGRATE_CONVERSATIONS_COMPACTION:
+        async with engine.begin() as conn:
+            await conn.execute(text(ddl))
+    print("✓ conversations compaction columns added (idempotent)")
 
     # 3) HNSW index on embeddings.
     async with engine.begin() as conn:

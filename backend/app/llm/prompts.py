@@ -38,3 +38,12 @@ If the context is missing what you need, say what is missing instead of guessing
         header = f"### {c['file_path']} {span} {c['language']}".rstrip()
         parts.append(f"\n{header}\n```\n{c['content'].strip()}\n```\n")
     return "\n".join(parts)
+
+
+def append_context_summary(system: str, summary: str | None) -> str:
+    """Fold the conversation's rolling compaction summary (see
+    app/agents/compaction.py) into the system prompt as its own section, when
+    present."""
+    if not summary:
+        return system
+    return f"{system}\n\n## Summary of earlier conversation (older messages were compacted)\n{summary}"

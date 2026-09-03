@@ -169,7 +169,9 @@ export interface ProjectSettings {
   rag_top_k: number;
   rag_max_chars: number;
   mcp_servers: Record<string, unknown>[] | null;
-  model_default: string | null;
+  coding_model: string | null;
+  fast_chat_model: string | null;
+  compaction_model: string | null;
   updated_at: string;
 }
 

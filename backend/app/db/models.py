@@ -146,12 +146,16 @@ class Project(Base):
 
 
 class ProjectSettings(Base):
-    """Per-project configuration: sandbox ports, RAG retrieval knobs, and the
-    project's MCP server list. One row per project (unique ``project_id``),
-    so users tune each project independently through the web UI instead of
-    editing ``.env``. All numeric fields default to the spec values;
-    ``mcp_servers`` is a nullable JSON array of server configs and
-    ``model_default`` is an optional per-project model override.
+    """Per-project configuration: sandbox ports, RAG retrieval knobs, the
+    project's MCP server list, and per-project model-role overrides. One row
+    per project (unique ``project_id``), so users tune each project
+    independently through the web UI instead of editing ``.env``. All numeric
+    fields default to the spec values; ``mcp_servers`` is a nullable JSON
+    array of server configs. ``coding_model``/``fast_chat_model``/
+    ``compaction_model`` are optional per-project overrides of the
+    corresponding global ``ollama_*_model`` env default (embedding model is
+    intentionally not project-configurable — see docs/ARCHITECTURE.md on the
+    fixed pgvector dimension).
     """
 
     __tablename__ = "project_settings"
@@ -165,7 +169,9 @@ class ProjectSettings(Base):
     rag_top_k: Mapped[int] = mapped_column(Integer, default=8)
     rag_max_chars: Mapped[int] = mapped_column(Integer, default=12000)
     mcp_servers: Mapped[list | None] = mapped_column(JSONB)
-    model_default: Mapped[str | None] = mapped_column(String(64))
+    coding_model: Mapped[str | None] = mapped_column(String(64))
+    fast_chat_model: Mapped[str | None] = mapped_column(String(64))
+    compaction_model: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -186,6 +192,12 @@ class Conversation(Base):
     )
     title: Mapped[str] = mapped_column(String(255), default="New chat")
     model_default: Mapped[str | None] = mapped_column(String(64))
+    # Rolling compaction summary: folds messages that have fallen out of the
+    # verbatim history window (see HISTORY_LIMIT in app/api/chat.py) so they
+    # aren't simply dropped. `context_summary_through_seq` is the highest
+    # Message.sequence already folded in; None/0 = nothing compacted yet.
+    context_summary: Mapped[str | None] = mapped_column(Text)
+    context_summary_through_seq: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

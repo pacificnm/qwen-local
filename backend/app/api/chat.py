@@ -20,13 +20,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents import qwen_assistant
+from app.agents import compaction, qwen_assistant
 from app.api.conversations import _get_owned_conv
 from app.api.deps import get_current_user, get_db
 from app.core.settings import get_settings
-from app.db.models import Conversation, Message, Project, Repository, User
+from app.db.models import Conversation, Message, Project, ProjectSettings, Repository, User
 from app.db.session import get_session_factory
-from app.llm.prompts import BASE_SYSTEM, build_system
+from app.llm.prompts import BASE_SYSTEM, append_context_summary, build_system
 from app.repos.errors import SyncError
 from app.repos.retrieval import retrieve_chunks
 
@@ -68,11 +68,6 @@ _active: dict[uuid.UUID, _ActiveRun] = {}
 _by_request: dict[str, _ActiveRun] = {}
 
 
-def _known_models() -> set[str]:
-    s = get_settings()
-    return {s.ollama_fast_model, s.ollama_strong_model}
-
-
 def _release(conv_id: uuid.UUID, run: _ActiveRun) -> None:
     if _active.get(conv_id) is run:
         _active.pop(conv_id, None)
@@ -92,9 +87,17 @@ async def chat_stream(
             status_code=409, detail="A generation is already running in this conversation"
         )
 
-    model = body.model or conv.model_default or get_settings().ollama_strong_model
-    if model not in _known_models():
-        raise HTTPException(status_code=422, detail="unknown model")
+    project_settings = await db.scalar(
+        select(ProjectSettings).where(ProjectSettings.project_id == conv.project_id)
+    )
+    model = (
+        body.model
+        or conv.model_default
+        or (project_settings.coding_model if project_settings else None)
+        or get_settings().ollama_strong_model
+    )
+    if not model or not model.strip():
+        raise HTTPException(status_code=422, detail="model is required")
 
     effort = body.effort or qwen_assistant.DEFAULT_EFFORT
     if effort not in qwen_assistant.EFFORT_LEVELS:
@@ -119,6 +122,12 @@ async def chat_stream(
     assistant_seq = int(next_seq) + 1
     is_first_exchange = int(prior_count) == 0
 
+    # Fold any messages about to fall out of the verbatim history window into
+    # the conversation's rolling summary (non-fatal on failure — see module).
+    summary = await compaction.maybe_compact(
+        db, conv, next_seq=int(next_seq), history_limit=HISTORY_LIMIT
+    )
+
     # The conversation's project (when it has one) serves two purposes here:
     # its repo provides RAG context (top-8 chunks) and the target of the
     # agent's repo tools (read/write/edit/commit). Repo-less project = general.
@@ -138,6 +147,7 @@ async def chat_stream(
             ) from exc
         system = build_system(repo_obj.github_full_name, chunks)
     # repo vanished (FK SET NULL) → general chat without repo tools
+    system = append_context_summary(system, summary)
 
     history = (
         (

@@ -1,4 +1,5 @@
-"""Model picker endpoint — driven entirely by env config (MASTER_SPEC §1.1 #5)."""
+"""Model picker endpoint — models are discovered live from the Ollama server's
+`/api/tags` (whatever is actually installed), not hardcoded."""
 
 import asyncio
 import re
@@ -49,19 +50,41 @@ async def _context_window(model_id: str, settings) -> int | None:
     return None
 
 
+async def _list_installed(settings) -> list[dict]:
+    """Raw `/api/tags` entries, or [] when Ollama is unreachable (the UI then
+    shows/disables an empty picker rather than offering models that don't
+    actually work)."""
+    base = settings.effective_ollama_host.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            res = await client.get(f"{base}/api/tags")
+            res.raise_for_status()
+            return res.json().get("models") or []
+    except Exception:
+        return []
+
+
+def _label(entry: dict) -> str:
+    """Human label from an /api/tags entry: the tag plus parameter size /
+    quantization when Ollama reports them, e.g. "qwen3.8:27b (27B, Q4_K_M)"."""
+    name = entry.get("model") or entry.get("name") or "unknown"
+    details = entry.get("details") or {}
+    bits = [b for b in (details.get("parameter_size"), details.get("quantization_level")) if b]
+    return f"{name} ({', '.join(bits)})" if bits else name
+
+
 @router.get("/models", response_model=list[ModelOut])
 async def list_models():
     settings = get_settings()
-    fast_window, strong_window = await asyncio.gather(
-        _context_window(settings.ollama_fast_model, settings),
-        _context_window(settings.ollama_strong_model, settings),
-    )
+    entries = [e for e in await _list_installed(settings) if e.get("model") or e.get("name")]
+    ids = [e.get("model") or e.get("name") for e in entries]
+    windows = await asyncio.gather(*(_context_window(mid, settings) for mid in ids))
     return [
-        ModelOut(id=settings.ollama_fast_model, label="Qwen 3.5 4B (fast)", context_window=fast_window),
         ModelOut(
-            id=settings.ollama_strong_model,
-            label="Qwen 3.8 27B (default)",
-            is_default=True,
-            context_window=strong_window,
-        ),
+            id=mid,
+            label=_label(entry),
+            is_default=(mid == settings.ollama_strong_model),
+            context_window=window,
+        )
+        for entry, mid, window in zip(entries, ids, windows, strict=True)
     ]

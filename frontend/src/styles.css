@@ -2659,6 +2659,21 @@ span.maintab.active {
   color: var(--text-dim);
 }
 
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.settings-section-head h3 {
+  margin-bottom: 0;
+}
+
+.settings-section-head .filetree-refresh {
+  margin-bottom: 0.75rem;
+}
+
 .modal label {
   display: flex;
   flex-direction: column;

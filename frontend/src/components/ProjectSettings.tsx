@@ -56,6 +56,8 @@ function timeAgo(iso: string): string {
 export default function ProjectSettings({ projectId, projectName }: Props) {
   const models = useModels((s) => s.models);
   const loadModels = useModels((s) => s.load);
+  const refreshModels = useModels((s) => s.refresh);
+  const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const { projects, busy: repoBusy, error, attachRepo, detachRepo, syncRepo } = useProjects();
   const { progress } = useRepos();
 
@@ -67,7 +69,9 @@ export default function ProjectSettings({ projectId, projectName }: Props) {
   const [sandboxContainerPort, setSandboxContainerPort] = useState("80");
   const [ragTopK, setRagTopK] = useState("8");
   const [ragMaxChars, setRagMaxChars] = useState("12000");
-  const [modelDefault, setModelDefault] = useState("");
+  const [codingModel, setCodingModel] = useState("");
+  const [fastChatModel, setFastChatModel] = useState("");
+  const [compactionModel, setCompactionModel] = useState("");
   const [mcpText, setMcpText] = useState("");
 
   // Repository section (moved here from the left-pane repo card).
@@ -90,7 +94,9 @@ export default function ProjectSettings({ projectId, projectName }: Props) {
     setSandboxContainerPort("80");
     setRagTopK("8");
     setRagMaxChars("12000");
-    setModelDefault("");
+    setCodingModel("");
+    setFastChatModel("");
+    setCompactionModel("");
     setMcpText("");
     setFullName("");
     setDetaching(false);
@@ -114,7 +120,9 @@ export default function ProjectSettings({ projectId, projectName }: Props) {
       setSandboxContainerPort(String(s.sandbox_container_port));
       setRagTopK(String(s.rag_top_k));
       setRagMaxChars(String(s.rag_max_chars));
-      setModelDefault(s.model_default ?? "");
+      setCodingModel(s.coding_model ?? "");
+      setFastChatModel(s.fast_chat_model ?? "");
+      setCompactionModel(s.compaction_model ?? "");
       setMcpText(s.mcp_servers ? JSON.stringify(s.mcp_servers, null, 2) : "");
     } catch (e) {
       setSave({ kind: "error", text: `Couldn't load settings: ${message(e)}` });
@@ -185,7 +193,9 @@ export default function ProjectSettings({ projectId, projectName }: Props) {
         rag_top_k: k.value!,
         rag_max_chars: ch.value!,
         mcp_servers: mcpServers,
-        model_default: modelDefault || null,
+        coding_model: codingModel || null,
+        fast_chat_model: fastChatModel || null,
+        compaction_model: compactionModel || null,
       });
       setSave({ kind: "saved" });
       window.setTimeout(() => setOpen(false), 650);
@@ -367,11 +377,50 @@ export default function ProjectSettings({ projectId, projectName }: Props) {
             </section>
 
             <section className="settings-section">
-              <h3>Defaults</h3>
+              <div className="settings-section-head">
+                <h3>Defaults</h3>
+                <button
+                  type="button"
+                  className="filetree-refresh"
+                  title="Refresh installed models"
+                  aria-label="Refresh installed models"
+                  disabled={modelsRefreshing}
+                  onClick={() => {
+                    setModelsRefreshing(true);
+                    void refreshModels().finally(() => setModelsRefreshing(false));
+                  }}
+                >
+                  ↻
+                </button>
+              </div>
               <label>
-                Default model
-                <select value={modelDefault} onChange={(e) => setModelDefault(e.target.value)}>
-                  <option value="">None — use conversation default</option>
+                Coding model
+                <select value={codingModel} onChange={(e) => setCodingModel(e.target.value)}>
+                  <option value="">None — use conversation/global default</option>
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Fast chat model
+                <select value={fastChatModel} onChange={(e) => setFastChatModel(e.target.value)}>
+                  <option value="">None — use global default</option>
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Compaction model
+                <select value={compactionModel} onChange={(e) => setCompactionModel(e.target.value)}>
+                  <option value="">None — use global default</option>
                   {models.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}

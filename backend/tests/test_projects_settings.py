@@ -13,7 +13,9 @@ def test_settings_in_defaults_match_db():
     assert s.rag_top_k == 8
     assert s.rag_max_chars == 12000
     assert s.mcp_servers is None
-    assert s.model_default is None
+    assert s.coding_model is None
+    assert s.fast_chat_model is None
+    assert s.compaction_model is None
 
 
 def test_settings_in_enforces_port_and_rag_bounds():
@@ -38,11 +40,15 @@ def test_settings_out_carries_settings_payload():
         rag_max_chars=20000,
         mcp_servers=[{"name": "notion", "type": "http", "config": {}},
                      {"name": "postgres", "type": "http", "config": {"api_key": "k"}}],
-        model_default="qwen3.5:4b",
+        coding_model="qwen3.8:27b-longctx",
+        fast_chat_model="qwen3.5:4b",
+        compaction_model="qwen3.5:4b",
         updated_at="2026-01-01T00:00:00Z",
     )
     data = out.model_dump()
     assert data["sandbox_port"] == 8080
     assert len(data["mcp_servers"]) == 2
     assert data["mcp_servers"][0]["name"] == "notion"
-    assert data["model_default"] == "qwen3.5:4b"
+    assert data["coding_model"] == "qwen3.8:27b-longctx"
+    assert data["fast_chat_model"] == "qwen3.5:4b"
+    assert data["compaction_model"] == "qwen3.5:4b"

@@ -6,6 +6,9 @@ interface ModelState {
   selectedId: string;
   loaded: boolean;
   load: () => Promise<void>;
+  /** Always re-fetches (unlike `load`, which is once-per-session) — used by
+   *  a manual "refresh installed models" affordance in ProjectSettings. */
+  refresh: () => Promise<void>;
   select: (id: string) => void;
 }
 
@@ -16,6 +19,10 @@ export const useModels = create<ModelState>()((set, get) => ({
 
   async load() {
     if (get().loaded) return;
+    await get().refresh();
+  },
+
+  async refresh() {
     const models = await api.models();
     const current = get().selectedId;
     const selectedId = models.some((m) => m.id === current)

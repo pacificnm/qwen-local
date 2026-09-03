@@ -48,7 +48,9 @@ class SettingsIn(BaseModel):
     rag_top_k: int = Field(default=8, ge=1, le=200)
     rag_max_chars: int = Field(default=12000, ge=1, le=100000)
     mcp_servers: list | None = None
-    model_default: str | None = Field(default=None, max_length=512)
+    coding_model: str | None = Field(default=None, max_length=64)
+    fast_chat_model: str | None = Field(default=None, max_length=64)
+    compaction_model: str | None = Field(default=None, max_length=64)
 
 
 class SettingsOut(BaseModel):
@@ -58,7 +60,9 @@ class SettingsOut(BaseModel):
     rag_top_k: int
     rag_max_chars: int
     mcp_servers: list | None
-    model_default: str | None
+    coding_model: str | None
+    fast_chat_model: str | None
+    compaction_model: str | None
     updated_at: datetime
 
 
@@ -70,7 +74,9 @@ def _settings_out(db_row: ProjectSettings, project_id: uuid.UUID) -> SettingsOut
         rag_top_k=db_row.rag_top_k,
         rag_max_chars=db_row.rag_max_chars,
         mcp_servers=db_row.mcp_servers,
-        model_default=db_row.model_default,
+        coding_model=db_row.coding_model,
+        fast_chat_model=db_row.fast_chat_model,
+        compaction_model=db_row.compaction_model,
         updated_at=db_row.updated_at,
     )
 
@@ -286,7 +292,9 @@ async def put_settings(
     row.rag_top_k = body.rag_top_k
     row.rag_max_chars = body.rag_max_chars
     row.mcp_servers = body.mcp_servers
-    row.model_default = body.model_default
+    row.coding_model = body.coding_model
+    row.fast_chat_model = body.fast_chat_model
+    row.compaction_model = body.compaction_model
     await db.commit()
     await db.refresh(row)
     return _settings_out(row, project.id)
