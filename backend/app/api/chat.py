@@ -26,7 +26,7 @@ from app.api.deps import get_current_user, get_db
 from app.core.settings import get_settings
 from app.db.models import Conversation, Message, Project, ProjectSettings, Repository, User
 from app.db.session import get_session_factory
-from app.llm.prompts import BASE_SYSTEM, append_context_summary, build_system
+from app.llm.prompts import BASE_SYSTEM, append_context_summary, append_mode_instructions, build_system
 from app.repos.errors import SyncError
 from app.repos.retrieval import retrieve_chunks
 
@@ -42,6 +42,7 @@ class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=64 * 1024)
     model: str | None = None  # absent → conversation default → strong model
     effort: str | None = None  # absent → DEFAULT_EFFORT; xhigh|high|medium|low
+    mode: str | None = None  # absent → "code"; ask|plan|code
 
 
 class CancelIn(BaseModel):
@@ -106,6 +107,12 @@ async def chat_stream(
             detail=f"unknown effort: {effort!r} (expected low|medium|high|xhigh)",
         )
 
+    mode = body.mode or "code"
+    if mode not in ("ask", "plan", "code"):
+        raise HTTPException(
+            status_code=422, detail=f"unknown mode: {mode!r} (expected ask|plan|code)"
+        )
+
     # Persist the user message BEFORE the stream opens (spec: always kept).
     next_seq = (
         await db.scalar(
@@ -148,6 +155,7 @@ async def chat_stream(
         system = build_system(repo_obj.github_full_name, chunks)
     # repo vanished (FK SET NULL) → general chat without repo tools
     system = append_context_summary(system, summary)
+    system = append_mode_instructions(system, mode)
 
     history = (
         (
@@ -177,6 +185,7 @@ async def chat_stream(
             conv_id=conv.id,
             model=model,
             effort=effort,
+            mode=mode,
             system=system,
             chat_history=chat_history,
             repo=repo_obj,
@@ -195,6 +204,7 @@ async def _stream(
     conv_id: uuid.UUID,
     model: str,
     effort: str,
+    mode: str,
     system: str,
     chat_history: list[dict],
     repo: Repository | None,
@@ -232,6 +242,7 @@ async def _stream(
                 emit=emit,
                 cancel=run.cancel,
                 effort=effort,
+                mode=mode,
             )
         finally:
             q.put_nowait(sentinel)
@@ -246,6 +257,7 @@ async def _stream(
                     "conversation_id": str(conv_id),
                     "model": model,
                     "effort": effort,
+                    "mode": mode,
                 }
             ),
         }
@@ -266,6 +278,7 @@ async def _stream(
         await _persist_turn(
             conv_id=conv_id,
             model=model,
+            mode=mode,
             assistant_seq=assistant_seq,
             state=state,
             is_first_exchange=is_first_exchange,
@@ -277,6 +290,7 @@ async def _persist_turn(
     *,
     conv_id: uuid.UUID,
     model: str,
+    mode: str,
     assistant_seq: int,
     state: _TurnState,
     is_first_exchange: bool,
@@ -296,6 +310,7 @@ async def _persist_turn(
                 role="assistant",
                 content=text,
                 model=model,
+                mode=mode,
                 tool_calls=state.tools if state.tools else None,  # JSONB takes the list
                 sequence=assistant_seq,
             )

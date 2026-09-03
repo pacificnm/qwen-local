@@ -28,6 +28,8 @@ interface ChatState {
   error: string | null;
   /** Reasoning effort (low|medium|high|xhigh), persisted across reloads. */
   effort: api.Effort;
+  /** Chat mode (ask|plan|code), persisted across reloads. */
+  mode: api.ChatMode;
   /** Last turn's prompt tokens (how much of the model's context was used). */
   contextUsed: number | null;
   /** Non-fatal warning from the backend (e.g. LLM call budget exhausted). */
@@ -43,6 +45,7 @@ interface ChatState {
   remove: (id: string) => Promise<void>;
   send: (text: string, model: string, abort: AbortController) => Promise<void>;
   setEffort: (e: api.Effort) => void;
+  setMode: (m: api.ChatMode) => void;
   cancel: () => Promise<void>;
   clearError: () => void;
   clearWarning: () => void;
@@ -66,6 +69,20 @@ function loadEffort(): api.Effort {
   return "medium";
 }
 
+const MODE_KEY = "qc.mode";
+
+function loadMode(): api.ChatMode {
+  try {
+    const stored = localStorage.getItem(MODE_KEY);
+    if (stored && (api.MODES as readonly string[]).includes(stored)) {
+      return stored as api.ChatMode;
+    }
+  } catch {
+    /* SSR / blocked storage — fall back to the default */
+  }
+  return "code";
+}
+
 export const useChat = create<ChatState>()((set, get) => ({
   conversations: [],
   hasMore: false,
@@ -81,6 +98,7 @@ export const useChat = create<ChatState>()((set, get) => ({
   toolCalls: [],
   error: null,
   effort: loadEffort(),
+  mode: loadMode(),
   contextUsed: null,
   warning: null,
 
@@ -231,7 +249,13 @@ export const useChat = create<ChatState>()((set, get) => ({
 
     try {
       await api.streamChat(
-        { conversation_id: convId, message: text, model: modelId, effort: get().effort },
+        {
+          conversation_id: convId,
+          message: text,
+          model: modelId,
+          effort: get().effort,
+          mode: get().mode,
+        },
         (event, data) => {
           const cur = get();
           switch (event) {
@@ -367,6 +391,15 @@ export const useChat = create<ChatState>()((set, get) => ({
     set({ effort: e });
     try {
       localStorage.setItem(EFFORT_KEY, e);
+    } catch {
+      /* blocked storage — the value still applies for this session */
+    }
+  },
+
+  setMode(m) {
+    set({ mode: m });
+    try {
+      localStorage.setItem(MODE_KEY, m);
     } catch {
       /* blocked storage — the value still applies for this session */
     }

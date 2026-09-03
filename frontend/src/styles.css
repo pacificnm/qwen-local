@@ -869,6 +869,12 @@ body.pane-dragging .pane-resizer::after {
   color: #ffcf87;
 }
 
+.banner-proceed {
+  background: color-mix(in srgb, var(--ok, #2fbf71) 14%, var(--bg-panel));
+  border: 1px solid color-mix(in srgb, var(--ok, #2fbf71) 45%, var(--border));
+  color: #b6f0cd;
+}
+
 .banner button {
   flex-shrink: 0;
   padding: 0.25rem 0.6rem;
@@ -915,6 +921,7 @@ body.pane-dragging .pane-resizer::after {
   padding: 0.35rem 0.55rem 0.5rem;
 }
 
+.mode-picker,
 .model-select,
 .effort-picker {
   width: auto;
@@ -925,6 +932,7 @@ body.pane-dragging .pane-resizer::after {
   color: var(--text-dim);
 }
 
+.mode-picker:focus,
 .model-select:focus,
 .effort-picker:focus {
   color: var(--text);

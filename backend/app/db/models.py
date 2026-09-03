@@ -220,6 +220,8 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(16))  # system | user | assistant
     content: Mapped[str] = mapped_column(Text)
     model: Mapped[str | None] = mapped_column(String(64))
+    # Chat mode this turn ran under: ask | plan | code (null for pre-migration rows).
+    mode: Mapped[str | None] = mapped_column(String(16))
     # Agent tool invocation log for this turn (names, args, status).
     tool_calls: Mapped[list | None] = mapped_column(JSONB)
     sequence: Mapped[int] = mapped_column(Integer)

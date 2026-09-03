@@ -456,6 +456,41 @@ async def test_general_tools_registered_unconditionally(tmp_path, monkeypatch):
     assert tools[6].name == "repo_list_files"
 
 
+READONLY_TOOL_NAMES = {
+    "web_search", "docker_logs", "repo_list_files", "repo_read_file",
+    "frontend_lint", "frontend_typecheck", "backend_lint",
+    "backend_typecheck", "backend_tests",
+}
+
+
+async def test_build_tools_ask_and_plan_modes_restrict_to_readonly(tmp_path, monkeypatch):
+    rt, _events = _runtime(tmp_path, monkeypatch, full_repo=False)
+    class R:
+        github_full_name = "o/r"
+    for mode in ("ask", "plan"):
+        # No repo: only web_search survives (code_interpreter/shell are mutating).
+        tools = t.build_tools(rt, None, mode=mode)
+        assert {x.name for x in tools} == {"web_search"}
+        assert all(x.readonly for x in tools)
+
+        # Repo-bound: the full readonly subset, nothing mutating slips through.
+        tools = t.build_tools(rt, R(), mode=mode)
+        assert {x.name for x in tools} == READONLY_TOOL_NAMES
+        assert all(x.readonly for x in tools)
+
+
+async def test_build_tools_code_mode_default_and_explicit_are_unchanged(tmp_path, monkeypatch):
+    rt, _events = _runtime(tmp_path, monkeypatch, full_repo=False)
+    class R:
+        github_full_name = "o/r"
+    assert [x.name for x in t.build_tools(rt, None)] == ["web_search", "code_interpreter", "shell"]
+    assert [x.name for x in t.build_tools(rt, None, mode="code")] == [
+        "web_search", "code_interpreter", "shell",
+    ]
+    assert len(t.build_tools(rt, R())) == 16
+    assert len(t.build_tools(rt, R(), mode="code")) == 16
+
+
 # --- LLM wiring: raw API + Ollama `reasoning` shim ---------------------------
 
 

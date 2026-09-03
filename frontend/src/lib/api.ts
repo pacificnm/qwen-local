@@ -571,6 +571,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   model?: string | null;
+  mode?: ChatMode | null;
   sequence: number;
   tool_calls?: ToolCallInfo[] | null;
 }
@@ -654,11 +655,16 @@ export async function deleteConversation(id: string): Promise<void> {
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 export type Effort = (typeof EFFORT_LEVELS)[number];
 
+/** Chat modes, matching the backend's ask|plan|code. */
+export const MODES = ["ask", "plan", "code"] as const;
+export type ChatMode = (typeof MODES)[number];
+
 export interface ChatStartPayload {
   conversation_id: string;
   message: string;
   model?: string;
   effort?: Effort;
+  mode?: ChatMode;
 }
 
 /** POST /chat/stream is SSE; EventSource can't POST, so we decode frames by hand. */

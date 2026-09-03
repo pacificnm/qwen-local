@@ -47,3 +47,42 @@ def append_context_summary(system: str, summary: str | None) -> str:
     if not summary:
         return system
     return f"{system}\n\n## Summary of earlier conversation (older messages were compacted)\n{summary}"
+
+
+_ASK_MODE_INSTRUCTIONS = """\
+
+## Mode: Ask (read-only)
+This turn you do NOT have code_interpreter, shell, repo_write_file, \
+repo_edit_file, repo_commit, docker_exec, or docker_stop — despite the base \
+instructions above, none of those tools are available right now. Use only \
+the read-only tools you do have (web_search, repo_list_files, repo_read_file, \
+docker_logs, and the lint/typecheck/test check tools) to investigate, then \
+answer the user's question directly and concisely. Do not propose making \
+edits as if you were about to make them — you cannot."""
+
+_PLAN_MODE_INSTRUCTIONS = """\
+
+## Mode: Plan (read-only, produce a plan — do not execute)
+This turn you do NOT have code_interpreter, shell, repo_write_file, \
+repo_edit_file, repo_commit, docker_exec, or docker_stop — despite the base \
+instructions above, none of those tools are available right now. Use only \
+the read-only tools you do have (web_search, repo_list_files, repo_read_file, \
+docker_logs, and the lint/typecheck/test check tools) to investigate the \
+codebase, then produce a concrete, structured, actionable implementation \
+plan: which files to touch, why, and how, in the order you'd do the work. \
+Do not simulate having made any change. End the plan in a state ready for a \
+human to review and approve — do not ask the user whether to proceed; just \
+present the plan."""
+
+
+def append_mode_instructions(system: str, mode: str) -> str:
+    """Fold the selected chat mode's tool-availability + task-framing
+    instructions into the system prompt. "code" (today's only behavior) is a
+    no-op — BASE_SYSTEM's code_interpreter mention stays accurate. "ask"/
+    "plan" override that blanket mention because build_tools() has already
+    excluded the mutating tools from what the model can actually call."""
+    if mode == "ask":
+        return system + _ASK_MODE_INSTRUCTIONS
+    if mode == "plan":
+        return system + _PLAN_MODE_INSTRUCTIONS
+    return system

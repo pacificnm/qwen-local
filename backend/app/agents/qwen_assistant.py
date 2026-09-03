@@ -332,6 +332,7 @@ async def run_turn(
     cancel: asyncio.Event,
     assistant: Assistant | None = None,
     effort: str | None = DEFAULT_EFFORT,
+    mode: str = "code",
 ) -> str:
     """Run one user turn via Qwen-Agent; emits the SSE events live.
 
@@ -339,11 +340,14 @@ async def run_turn(
     (defaults to a real Assistant built for `model`). `effort` selects the
     per-request thinking parameters (see `EFFORT_LEVELS`) for the built
     assistant; a caller-supplied `assistant` owns its own LLM and ignores it.
+    `mode` ("ask"/"plan"/"code") selects the tool subset via `build_tools` —
+    the corresponding system-prompt instructions are already baked into
+    `system` by the caller (app/api/chat.py), not this module's concern.
     """
     loop = asyncio.get_running_loop()
     rt = TurnRuntime(emit=emit, cancel=cancel, loop=loop)
     if assistant is None:
-        assistant = build_assistant(model, build_tools(rt, repo), effort)
+        assistant = build_assistant(model, build_tools(rt, repo, mode=mode), effort)
 
     messages: list[dict] = [{"role": "system", "content": system}, *history]
     q: asyncio.Queue = asyncio.Queue()

@@ -222,6 +222,15 @@ async def main() -> None:
             await conn.execute(text(ddl))
     print("✓ conversations compaction columns added (idempotent)")
 
+    # 2g) Message chat-mode column (idempotent).
+    MIGRATE_MESSAGES_MODE = [
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS mode VARCHAR(16)",
+    ]
+    for ddl in MIGRATE_MESSAGES_MODE:
+        async with engine.begin() as conn:
+            await conn.execute(text(ddl))
+    print("✓ messages.mode column added (idempotent)")
+
     # 3) HNSW index on embeddings.
     async with engine.begin() as conn:
         await conn.execute(text(HNSW_INDEX))

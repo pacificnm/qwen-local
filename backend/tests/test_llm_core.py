@@ -4,7 +4,7 @@ import asyncio
 
 from app.llm import agent
 from app.llm.client import DoneDelta, LLMClient, TextDelta, ThinkingDelta, ToolCallDelta
-from app.llm.prompts import BASE_SYSTEM, build_system
+from app.llm.prompts import BASE_SYSTEM, append_context_summary, append_mode_instructions, build_system
 from app.llm.tools import Tool, parse_tool_arguments
 
 MODEL = "qwen3.8:27b-longctx"
@@ -248,6 +248,40 @@ def test_build_system_injects_chunks():
 
 def test_build_system_empty_is_base():
     assert build_system(None, []) == BASE_SYSTEM
+
+
+def test_append_context_summary_noop_when_absent():
+    assert append_context_summary(BASE_SYSTEM, None) == BASE_SYSTEM
+    assert append_context_summary(BASE_SYSTEM, "") == BASE_SYSTEM
+
+
+def test_append_context_summary_appends_section():
+    out = append_context_summary(BASE_SYSTEM, "user asked to rename foo to bar")
+    assert out.startswith(BASE_SYSTEM)
+    assert "Summary of earlier conversation" in out
+    assert "rename foo to bar" in out
+
+
+def test_append_mode_instructions_code_is_noop():
+    assert append_mode_instructions(BASE_SYSTEM, "code") == BASE_SYSTEM
+    # Unrecognized values fail open to the full-behavior no-op — chat.py's
+    # own validation is what actually rejects a bad mode before this runs.
+    assert append_mode_instructions(BASE_SYSTEM, "bogus") == BASE_SYSTEM
+
+
+def test_append_mode_instructions_ask_and_plan_append_nonempty_text():
+    for mode in ("ask", "plan"):
+        out = append_mode_instructions(BASE_SYSTEM, mode)
+        assert out.startswith(BASE_SYSTEM)
+        assert len(out) > len(BASE_SYSTEM)
+        # Explicitly overrides BASE_SYSTEM's blanket code_interpreter mention.
+        assert "code_interpreter" in out
+        assert "shell" in out
+    ask = append_mode_instructions(BASE_SYSTEM, "ask")
+    plan = append_mode_instructions(BASE_SYSTEM, "plan")
+    assert ask != plan
+    assert "Mode: Ask" in ask
+    assert "Mode: Plan" in plan
 
 
 def _sync(coro):

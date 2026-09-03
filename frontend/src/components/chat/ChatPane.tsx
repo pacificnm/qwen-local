@@ -3,18 +3,20 @@ import { onFileMention } from "../../lib/fileMentionBus";
 import { useChat } from "../../store/chat";
 import { useModels } from "../../store/models";
 import { BannerError } from "./BannerError";
+import { BannerProceed } from "./BannerProceed";
 import { BannerWelcome } from "./BannerWelcome";
 import { ChatMessages } from "./ChatMessages";
 import { ButtonComposer } from "./ButtonComposer";
 import { ContextWindow } from "./ContextWindow";
 import { SelectEffort } from "./SelectEffort";
+import { SelectMode } from "./SelectMode";
 import { SelectModel } from "./SelectModel";
 import { StreamingAssistant } from "./StreamingAssistant";
 import { StreamingThinking } from "./StreamingThinking";
 import { TextareaComposer } from "./TextareaComposer";
 
 export default function ChatPane() {
-  const { messages, phase, assistantText, thinkingText, send, cancel } = useChat();
+  const { messages, phase, assistantText, thinkingText, send, cancel, setMode } = useChat();
   const { selectedId } = useModels();
 
   const [draft, setDraft] = useState("");
@@ -58,10 +60,8 @@ export default function ChatPane() {
     [],
   );
 
-  async function doSend() {
-    const text = draft.trim();
-    if (!text || busy) return;
-    setDraft("");
+  async function sendText(text: string) {
+    if (!text.trim() || busy) return;
     setStreamErr(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -70,6 +70,18 @@ export default function ChatPane() {
     } catch (e) {
       setStreamErr(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  async function doSend() {
+    const text = draft.trim();
+    if (!text) return;
+    setDraft("");
+    await sendText(text);
+  }
+
+  function doProceed() {
+    setMode("code");
+    void sendText("Proceed with the plan above.");
   }
 
   function doCancel() {
@@ -82,6 +94,7 @@ export default function ChatPane() {
         <BannerWelcome />
 
         <ChatMessages />
+        <BannerProceed onProceed={doProceed} />
 
         <StreamingThinking />
         <StreamingAssistant />
@@ -103,6 +116,7 @@ export default function ChatPane() {
           />
           <div className="composer-bar">
             <div className="composer-bar-left">
+              <SelectMode busy={busy} />
               <SelectModel busy={busy} />
               <SelectEffort />
               <ContextWindow />

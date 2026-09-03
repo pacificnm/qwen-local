@@ -82,6 +82,10 @@ class _AppTool(BaseTool):
     #: True if the handler streams its own ``tool_output`` increments while running.
     streams = False
 
+    #: True if the tool only inspects state (no writes, no execution, no docker
+    #: mutation). Ask/Plan mode registers ONLY readonly=True tools (see build_tools).
+    readonly = False
+
     def __init__(self, rt: TurnRuntime, cfg: dict | None = None):
         super().__init__(cfg)
         self.rt = rt
@@ -119,6 +123,7 @@ class _AppTool(BaseTool):
 # --------------------------------------------------------------------------- #
 class WebSearchTool(_AppTool):
     name = "web_search"
+    readonly = True
     description = (
         "Search the web (self-hosted SearXNG) for current information: documentation, "
         "APIs, libraries, changelogs, versions. Returns the top 6 titles, URLs and "
@@ -241,6 +246,7 @@ class DockerStopTool(_RepoTool):
 
 class DockerLogsTool(_RepoTool):
     name = "docker_logs"
+    readonly = True
     description = (
         "Get the last N lines of the project's own sandbox container's logs "
         "(stdout+stderr) — the one backing the Terminal Dock."
@@ -285,6 +291,7 @@ class DockerExecTool(_RepoTool):
 
 class RepoListFiles(_RepoTool):
     name = "repo_list_files"
+    readonly = True
     description = (
         "List files in the linked GitHub repository as repo-relative paths. "
         "Optionally narrow to a directory prefix."
@@ -322,6 +329,7 @@ class RepoListFiles(_RepoTool):
 
 class RepoReadFile(_RepoTool):
     name = "repo_read_file"
+    readonly = True
     description = "Read one file from the linked GitHub repository (repo-relative path)."
     parameters = {
         "type": "object",
@@ -536,6 +544,7 @@ class _CheckTool(_RepoTool):
 
 class FrontendLintTool(_CheckTool):
     name = "frontend_lint"
+    readonly = True
     description = (
         "Run ESLint on the frontend/ directory of the linked repository. "
         "Returns 'no problems found' or the list of lint errors with file:line."
@@ -546,6 +555,7 @@ class FrontendLintTool(_CheckTool):
 
 class FrontendTypecheckTool(_CheckTool):
     name = "frontend_typecheck"
+    readonly = True
     description = (
         "Run the TypeScript compiler (tsc --noEmit) on the frontend/ directory "
         "of the linked repository. Returns 'no type errors' or the list of "
@@ -557,6 +567,7 @@ class FrontendTypecheckTool(_CheckTool):
 
 class BackendLintTool(_CheckTool):
     name = "backend_lint"
+    readonly = True
     description = (
         "Run ruff (Python linter) on the backend/ directory of the linked "
         "repository. Returns 'no lint errors' or the list of issues with file:line."
@@ -567,6 +578,7 @@ class BackendLintTool(_CheckTool):
 
 class BackendTypecheckTool(_CheckTool):
     name = "backend_typecheck"
+    readonly = True
     description = (
         "Run mypy (Python type checker) on the backend/app/ directory of the "
         "linked repository. Returns 'no type errors' or the list of type errors."
@@ -577,6 +589,7 @@ class BackendTypecheckTool(_CheckTool):
 
 class BackendTestsTool(_CheckTool):
     name = "backend_tests"
+    readonly = True
     description = (
         "Run the backend test suite (pytest) for the linked repository. "
         "Returns 'all tests passed' or the first failure with a short traceback."
@@ -585,8 +598,12 @@ class BackendTestsTool(_CheckTool):
     check_fn = staticmethod(checks.backend_tests)
 
 
-def build_tools(rt: TurnRuntime, repo: object | None) -> list[_AppTool]:
-    """The turn's toolset; repo tools only when the conversation is bound to a repo."""
+def build_tools(rt: TurnRuntime, repo: object | None, *, mode: str = "code") -> list[_AppTool]:
+    """The turn's toolset; repo tools only when the conversation is bound to a repo.
+
+    `mode` "ask"/"plan" restrict the set to `readonly=True` tools (investigate
+    only, no edits/execution); "code" (default) keeps today's full set.
+    """
     tools: list[_AppTool] = [
         WebSearchTool(rt),
         CodeInterpreterTool(rt),
@@ -609,4 +626,6 @@ def build_tools(rt: TurnRuntime, repo: object | None) -> list[_AppTool]:
             BackendTypecheckTool(rt, full_name),
             BackendTestsTool(rt, full_name),
         ]
+    if mode in ("ask", "plan"):
+        tools = [tool for tool in tools if tool.readonly]
     return tools

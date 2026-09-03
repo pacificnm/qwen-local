@@ -72,6 +72,7 @@ def _msg_out(m: Message) -> dict:
         "role": m.role,
         "content": m.content,
         "model": m.model,
+        "mode": m.mode,
         "tool_calls": m.tool_calls,
         "sequence": m.sequence,
         "created_at": m.created_at,
