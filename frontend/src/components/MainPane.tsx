@@ -1,18 +1,69 @@
-import { DiffEditor, Editor } from "@monaco-editor/react";
+import { DiffEditor, Editor, type OnMount } from "@monaco-editor/react";
 import "../lib/monaco";
+import { copyText } from "../lib/clipboard";
+import { addSnippetToChat } from "../lib/fileMentionBus";
 import ChatPane from "./chat/ChatPane";
 import TerminalDock from "./TerminalDock";
 import ToolCallsPane from "./ToolCallsPane";
 import { TOOL_CALLS_TAB_ID, useEditor, type EditorTab } from "../store/editor";
+import { useRepos } from "../store/repos";
 
 /** One editor tab's body: head (path + view toggle) + Monaco + commit hint. */
 function EditorBody({ tab }: { tab: EditorTab }) {
   const setWorking = useEditor((s) => s.setWorking);
+  const repoName = useRepos((s) => s.repos.find((r) => r.id === tab.repoId)?.github_full_name);
   const setView = useEditor((s) => s.setView);
   const showDiff = tab.view === "diff" && tab.original !== null;
 
   const loading = tab.original === null && !tab.loadError && tab.repoId !== null;
   const readOnly = loading;
+
+  // Editor right-click menu: a few app-specific actions clustered below
+  // Monaco's own built-ins (Cut/Copy/Paste, Find, Command Palette, …), same
+  // pattern VS Code itself uses for extension-contributed menu items.
+  const handleMount: OnMount = (ed) => {
+    if (tab.path) {
+      const qualifiedPath = repoName ? `${repoName}/${tab.path}` : tab.path;
+      ed.addAction({
+        id: "qc.copyPath",
+        label: "Copy Path",
+        contextMenuGroupId: "9_qwenchat",
+        contextMenuOrder: 1,
+        run: () => {
+          void copyText(qualifiedPath).then((ok) => {
+            if (!ok) alert("The clipboard is unavailable in this browser context.");
+          });
+        },
+      });
+      ed.addAction({
+        id: "qc.copyRelativePath",
+        label: "Copy Relative Path",
+        contextMenuGroupId: "9_qwenchat",
+        contextMenuOrder: 2,
+        run: () => {
+          void copyText(tab.path!).then((ok) => {
+            if (!ok) alert("The clipboard is unavailable in this browser context.");
+          });
+        },
+      });
+    }
+    ed.addAction({
+      id: "qc.askAiAboutSelection",
+      label: "Ask AI about Selection",
+      precondition: "editorHasSelection",
+      contextMenuGroupId: "9_qwenchat",
+      contextMenuOrder: 3,
+      run: (e) => {
+        const sel = e.getSelection();
+        const model = e.getModel();
+        if (!sel || !model) return;
+        const code = model.getValueInRange(sel);
+        if (!code.trim()) return;
+        addSnippetToChat(tab.path ?? tab.label, code, tab.language);
+        useEditor.getState().focusChat();
+      },
+    });
+  };
 
   return (
     <div className="editor-body">
@@ -63,6 +114,7 @@ function EditorBody({ tab }: { tab: EditorTab }) {
             language={tab.language}
             value={tab.working}
             onChange={(v) => setWorking(tab.id, v ?? "")}
+            onMount={handleMount}
             theme="vs-dark"
             options={{
               minimap: { enabled: false },
