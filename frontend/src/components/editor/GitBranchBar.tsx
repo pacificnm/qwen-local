@@ -28,6 +28,16 @@ export function GitBranchBar({ repoId, git }: { repoId: string; git: GitState })
   const slug = slugifyText(description);
   const computedName = issueNumber.trim() ? `issue-${issueNumber.trim()}-${slug}` : slug;
 
+  // Nothing to push: no commits yet, or (with an upstream already set) fully
+  // up to date with it. Without an upstream, any commit is pushable — that's
+  // what establishes the tracking branch.
+  const nothingToPush = !git.has_commits || (!!git.upstream && (git.ahead ?? 0) === 0);
+  const pushTitle = !git.has_commits
+    ? "Nothing to push yet — commit changes first"
+    : nothingToPush
+      ? `Already up to date with ${git.upstream}`
+      : undefined;
+
   function cancelCreate() {
     setCreating(false);
     setIssueNumber("");
@@ -70,7 +80,8 @@ export function GitBranchBar({ repoId, git }: { repoId: string; git: GitState })
           <button
             type="button"
             className="primary git-push-btn"
-            disabled={!!gitBusy}
+            disabled={!!gitBusy || nothingToPush}
+            title={pushTitle}
             onClick={() => void pushBranch(repoId)}
           >
             {gitBusy === "push" ? "Pushing…" : `Push ${git.branch || "branch"}`}
