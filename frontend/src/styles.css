@@ -212,7 +212,11 @@ label {
   bottom: 0;
   left: 2.5px;
   width: 1px;
-  background: transparent;
+  /* Visible at rest (not just on hover/focus/drag) — otherwise the 6px
+     resizer track is a fully transparent strip that, combined with the
+     padding on both adjacent panes, reads as unstyled empty space instead
+     of an intentional divider between panes. */
+  background: var(--border);
   transition: background 0.15s ease;
 }
 
