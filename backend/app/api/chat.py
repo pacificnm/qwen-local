@@ -35,6 +35,10 @@ _logger = logging.getLogger("app.chat")
 
 HISTORY_LIMIT = 40  # recent messages kept in context (oldest dropped first)
 AUTO_TITLE_CHARS = 60
+# Each individual tool_output chunk is already capped (tools.TOOL_OUTPUT_CAP);
+# this bounds the ACCUMULATED total for a streaming tool's many small chunks
+# before it lands in the persisted Message.tool_calls JSONB.
+TOOL_OUTPUT_PERSIST_CAP = 64 * 1024
 
 
 class ChatIn(BaseModel):
@@ -199,6 +203,41 @@ async def chat_stream(
     )
 
 
+def _apply_tool_event(tools: list[dict], name: str, data: dict) -> None:
+    """Fold one tool_start/tool_output/tool_end SSE event into `tools`
+    (mutated in place) — the accumulator behind the persisted
+    `Message.tool_calls`. Split out of `_stream`'s `emit` closure so it's
+    unit-testable without the SSE/queue machinery around it.
+
+    "_index" is bookkeeping only (matches tool_output/tool_end to the right
+    call — MONOTONIC per turn, so it also survives concurrent/interleaved
+    tool calls); "_capped" marks an entry whose output already hit
+    TOOL_OUTPUT_PERSIST_CAP so further chunks are dropped instead of
+    re-truncating on every one. Both are stripped before persisting
+    (see `_persist_turn`).
+    """
+    if name == "tool_start":
+        tools.append({"name": data.get("tool"), "arguments": data.get("arguments"), "_index": data.get("index")})
+    elif name == "tool_output":
+        idx = data.get("index")
+        for t in tools:
+            if t.get("_index") == idx and not t.get("_capped"):
+                combined = t.get("output", "") + str(data.get("text", ""))
+                if len(combined) > TOOL_OUTPUT_PERSIST_CAP:
+                    note = f"\n… [truncated to {TOOL_OUTPUT_PERSIST_CAP // 1024} KB]"
+                    combined = combined[: TOOL_OUTPUT_PERSIST_CAP - len(note)] + note
+                    t["_capped"] = True
+                t["output"] = combined
+                break
+    elif name == "tool_end":
+        idx = data.get("index")
+        for t in tools:
+            if t.get("_index") == idx:
+                t["ok"] = bool(data.get("ok"))
+                t["duration_ms"] = int(data.get("duration_ms", 0))
+                break
+
+
 async def _stream(
     *,
     conv_id: uuid.UUID,
@@ -220,14 +259,8 @@ async def _stream(
     async def emit(name: str, data: dict) -> None:
         if name == "token":
             state.text_parts.append(str(data.get("text", "")))
-        elif name == "tool_start":
-            state.tools.append({"name": data.get("tool"), "arguments": data.get("arguments")})
-        elif name == "tool_end":
-            for t in reversed(state.tools):
-                if "ok" not in t:
-                    t["ok"] = bool(data.get("ok"))
-                    t["duration_ms"] = int(data.get("duration_ms", 0))
-                    break
+        elif name in ("tool_start", "tool_output", "tool_end"):
+            _apply_tool_event(state.tools, name, data)
         elif name in ("done", "cancelled", "error"):
             state.status = name
         q.put_nowait((name, data))
@@ -300,6 +333,9 @@ async def _persist_turn(
     text = "".join(state.text_parts)
     if not (text.strip() or state.tools):
         return
+    # Strip internal bookkeeping (_index/_capped — used only to route
+    # tool_output/tool_end to the right entry while the turn is live).
+    public_tools = [{k: v for k, v in t.items() if not k.startswith("_")} for t in state.tools]
     async with get_session_factory()() as db:
         conv = await db.get(Conversation, conv_id)
         if conv is None:
@@ -311,7 +347,7 @@ async def _persist_turn(
                 content=text,
                 model=model,
                 mode=mode,
-                tool_calls=state.tools if state.tools else None,  # JSONB takes the list
+                tool_calls=public_tools if public_tools else None,  # JSONB takes the list
                 sequence=assistant_seq,
             )
         )

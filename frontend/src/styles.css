@@ -834,6 +834,30 @@ body.pane-dragging .pane-resizer::after {
   font-size: 0.78rem;
 }
 
+.tool-chip.clickable {
+  cursor: pointer;
+}
+
+.tool-chip.clickable:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.toolcall-block {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 45vh;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem 0.8rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
 /* status + banners */
 
 .chat-status {
@@ -2641,6 +2665,10 @@ span.maintab.active {
   border-radius: 14px;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
   padding: 1.1rem 1.25rem 1.3rem;
+}
+
+.modal-wide {
+  max-width: 760px;
 }
 
 .modal-head {

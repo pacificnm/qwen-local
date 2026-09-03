@@ -1,39 +1,24 @@
+import { useState } from "react";
 import type { ToolCallInfo } from "../lib/api";
 import { useChat } from "../store/chat";
+import { ToolCallModal } from "./ToolCallModal";
 
-export function ToolChips({ calls }: { calls: ToolCallInfo[] }) {
+export function ToolChips({ calls, onSelect }: { calls: ToolCallInfo[]; onSelect: (index: number) => void }) {
   if (calls.length === 0) return null;
   return (
     <div className="tool-chips">
       {calls.map((t, i) => (
-        <span
+        <button
           key={i}
-          className={`tool-chip${t.ok === false ? " fail" : t.ok === true ? " ok" : ""}`}
-          title={t.arguments !== undefined ? JSON.stringify(t.arguments) : undefined}
+          type="button"
+          className={`tool-chip clickable${t.ok === false ? " fail" : t.ok === true ? " ok" : ""}`}
+          onClick={() => onSelect(i)}
+          title="Click for full call + response"
         >
           ⚙ {t.name}
           {t.ok !== undefined ? (t.ok ? " ✓" : " ✗") : " …"}
           {t.duration_ms !== undefined ? ` · ${t.duration_ms} ms` : ""}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-/** Live streamed output for tools that emit `tool_output` (e.g. code_interpreter).
- *  Open while the call is running, collapsed once it finishes. */
-export function ToolOutput({ calls }: { calls: ToolCallInfo[] }) {
-  const withOutput = calls.filter((t) => (t.output ?? "").length > 0);
-  if (withOutput.length === 0) return null;
-  return (
-    <div className="tool-outputs">
-      {withOutput.map((t, i) => (
-        <details key={i} className="tool-output" open={t.ok === undefined}>
-          <summary>
-            ⚙ {t.name} — output ({t.ok === false ? "failed" : t.ok === true ? "complete" : "streaming…"})
-          </summary>
-          <pre>{t.output}</pre>
-        </details>
+        </button>
       ))}
     </div>
   );
@@ -55,13 +40,21 @@ function PrLinks({ calls }: { calls: ToolCallInfo[] }) {
   );
 }
 
-/** One historical turn's tool activity (chips + streamed output + any PR links). */
-function TurnTools({ calls }: { calls: ToolCallInfo[] }) {
+/** One historical (or the live) turn's tool activity (chips + any PR links).
+ *  Click a chip to see its full arguments + output in a modal. */
+function TurnTools({
+  turnId,
+  calls,
+  onSelect,
+}: {
+  turnId: string;
+  calls: ToolCallInfo[];
+  onSelect: (turnId: string, index: number) => void;
+}) {
   if (calls.length === 0) return null;
   return (
     <div className="toolcalls-turn">
-      <ToolChips calls={calls} />
-      <ToolOutput calls={calls} />
+      <ToolChips calls={calls} onSelect={(i) => onSelect(turnId, i)} />
       <PrLinks calls={calls} />
     </div>
   );
@@ -70,8 +63,19 @@ function TurnTools({ calls }: { calls: ToolCallInfo[] }) {
 /** Fixed, non-closable tab: every tool call across the conversation (history + live). */
 export default function ToolCallsPane() {
   const { messages, toolCalls, phase } = useChat();
+  // An index into either a historical message's tool_calls or the live
+  // toolCalls list, re-resolved on every render (not the ToolCallInfo object
+  // itself, which the store replaces on each streamed update) — so the modal
+  // keeps showing a still-running call's output live while it's open.
+  const [selection, setSelection] = useState<{ turnId: string; index: number } | null>(null);
   const turns = messages.filter((m) => m.role === "assistant" && (m.tool_calls?.length ?? 0) > 0);
   const showLive = toolCalls.length > 0 && phase !== "idle";
+
+  const selectedCall = selection
+    ? selection.turnId === "live"
+      ? toolCalls[selection.index]
+      : turns.find((m) => m.id === selection.turnId)?.tool_calls?.[selection.index]
+    : undefined;
 
   if (turns.length === 0 && !showLive) {
     return (
@@ -87,10 +91,13 @@ export default function ToolCallsPane() {
     <div className="chat-pane">
       <div className="chat-scroll">
         {turns.map((m) => (
-          <TurnTools key={m.id} calls={m.tool_calls!} />
+          <TurnTools key={m.id} turnId={m.id} calls={m.tool_calls!} onSelect={(t, i) => setSelection({ turnId: t, index: i })} />
         ))}
-        {showLive && <TurnTools calls={toolCalls} />}
+        {showLive && (
+          <TurnTools turnId="live" calls={toolCalls} onSelect={(t, i) => setSelection({ turnId: t, index: i })} />
+        )}
       </div>
+      {selectedCall && <ToolCallModal call={selectedCall} onClose={() => setSelection(null)} />}
     </div>
   );
 }
