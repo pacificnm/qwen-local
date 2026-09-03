@@ -1746,6 +1746,8 @@ body.pane-dragging .pane-resizer::after {
 }
 
 .git-commit-sec textarea {
+  width: 100%;
+  box-sizing: border-box;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 0.8rem;
   color: var(--text);
@@ -1766,15 +1768,19 @@ body.pane-dragging .pane-resizer::after {
   margin-top: 0.5rem;
 }
 
+.git-commit-sec .commit-actions button {
+  width: 100%;
+}
+
 .git-push-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-elev);
-  padding: 0.45rem 0.6rem;
+  padding: 0.55rem 0.6rem;
 }
 
 .git-push-meta {
@@ -1821,7 +1827,7 @@ body.pane-dragging .pane-resizer::after {
 }
 
 .git-push-btn {
-  flex-shrink: 0;
+  flex: 1;
   padding: 0.4rem 0.9rem;
 }
 
