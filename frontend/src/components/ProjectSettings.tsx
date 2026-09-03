@@ -265,8 +265,11 @@ export default function ProjectSettings({ projectId, projectName }: Props) {
               {repo.last_synced_at ? ` · ${timeAgo(repo.last_synced_at)}` : ""}
             </div>
             {repo.last_commit_sha && (
-              <div className="repo-meta">
-                {repo.default_branch} · {repo.last_commit_sha.slice(0, 7)}
+              <div
+                className="repo-meta"
+                title="The branch/commit last indexed for search — switching branches in the Git tab doesn't update this until the next sync"
+              >
+                Indexed: {repo.default_branch} · {repo.last_commit_sha.slice(0, 7)}
               </div>
             )}
           </>

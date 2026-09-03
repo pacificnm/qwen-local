@@ -192,6 +192,20 @@ export function activeProject(s: ProjectsState): api.Project | null {
   return s.projects.find((p) => p.id === s.activeId) ?? null;
 }
 
+// A sync's own background progress-polling loop (useRepos) is the only thing
+// that knows when a job actually finishes; nothing re-fetches `projects`
+// afterward, so the Project Settings repo card (file/chunk counts, branch,
+// last commit) — which reads from THIS store, not useRepos — kept showing a
+// stale pre-sync snapshot until the next full page load. Refresh once
+// polling reports no repo running anymore, having previously reported one.
+useRepos.subscribe((state, prev) => {
+  const wasRunning = Object.keys(prev.progress).length > 0;
+  const isRunning = Object.keys(state.progress).length > 0;
+  if (wasRunning && !isRunning) {
+    void useProjects.getState().load();
+  }
+});
+
 export function isRepoRunning(repo: api.Repo | null): boolean {
   return repo !== null && RUNNING_STATES.has(repo.state);
 }
