@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import * as api from "../lib/api";
+import { useActiveProjectSettings } from "../store/activeProjectSettings";
 import { useModels } from "../store/models";
 import { useProjects } from "../store/projects";
 import { useRepos } from "../store/repos";
@@ -57,6 +58,7 @@ export default function ProjectSettings({ projectId, projectName }: Props) {
   const models = useModels((s) => s.models);
   const loadModels = useModels((s) => s.load);
   const refreshModels = useModels((s) => s.refresh);
+  const refreshActiveProjectSettings = useActiveProjectSettings((s) => s.refresh);
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const { projects, busy: repoBusy, error, attachRepo, detachRepo, syncRepo } = useProjects();
   const { progress } = useRepos();
@@ -197,6 +199,7 @@ export default function ProjectSettings({ projectId, projectName }: Props) {
         fast_chat_model: fastChatModel || null,
         compaction_model: compactionModel || null,
       });
+      void refreshActiveProjectSettings();
       setSave({ kind: "saved" });
       window.setTimeout(() => setOpen(false), 650);
     } catch (e) {

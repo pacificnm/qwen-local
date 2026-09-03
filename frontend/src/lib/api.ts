@@ -10,6 +10,10 @@ export interface Model {
   id: string;
   label: string;
   is_default: boolean;
+  /** Global fallback markers for the other two model roles, mirroring
+   *  `is_default` (coding/strong) — see SelectModel.tsx. */
+  is_default_fast_chat: boolean;
+  is_default_compaction: boolean;
   /** Runtime context window in tokens (Ollama `num_ctx`), when known. */
   context_window?: number | null;
 }

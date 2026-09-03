@@ -65,7 +65,11 @@ def _patch_client(monkeypatch, **kwargs):
 
 
 async def test_list_models_maps_installed_and_marks_default(monkeypatch):
-    settings = cs.Settings(ollama_strong_model="qwen3.8:27b-longctx")
+    settings = cs.Settings(
+        ollama_strong_model="qwen3.8:27b-longctx",
+        ollama_fast_model="qwen3.5:4b",
+        ollama_compaction_model="qwen3.5:4b",
+    )
     monkeypatch.setattr(models_api, "get_settings", lambda: settings)
     _patch_client(
         monkeypatch,
@@ -89,9 +93,15 @@ async def test_list_models_maps_installed_and_marks_default(monkeypatch):
     assert [m.id for m in result] == ["qwen3.8:27b-longctx", "qwen3.5:4b"]
     strong, fast = result
     assert strong.is_default is True
+    assert strong.is_default_fast_chat is False
+    assert strong.is_default_compaction is False
     assert strong.label == "qwen3.8:27b-longctx (27B, Q4_K_M)"
     assert strong.context_window == 32768
     assert fast.is_default is False
+    # fast and compaction share the same default tag here (as they do in
+    # Settings' own defaults) — both flags should be set on that one entry.
+    assert fast.is_default_fast_chat is True
+    assert fast.is_default_compaction is True
     assert fast.label == "qwen3.5:4b"
     assert fast.context_window is None
 

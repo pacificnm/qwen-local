@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useActiveProjectSettings } from "../store/activeProjectSettings";
 import { useAuth } from "../store/auth";
 import { useModels } from "../store/models";
 import { useChat } from "../store/chat";
@@ -39,6 +40,7 @@ export default function Shell() {
   const loadModels = useModels((s) => s.load);
   const loadConversations = useChat((s) => s.loadConversations);
   const newConversation = useChat((s) => s.newConversation);
+  const loadActiveProjectSettings = useActiveProjectSettings((s) => s.load);
   const projects = useProjects((s) => s.projects);
   const activeId = useProjects((s) => s.activeId);
   const loadProjects = useProjects((s) => s.load);
@@ -58,7 +60,8 @@ export default function Shell() {
   useEffect(() => {
     if (!activeProject) return;
     void loadConversations(activeProject.id).catch(() => undefined);
-  }, [activeProject, loadConversations]);
+    void loadActiveProjectSettings(activeProject.id).catch(() => undefined);
+  }, [activeProject, loadConversations, loadActiveProjectSettings]);
 
   // Persist widths; re-clamp when the window shrinks so the center pane stays usable.
   const clampWidth = (side: Side, w: number) => {

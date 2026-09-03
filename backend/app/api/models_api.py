@@ -21,6 +21,11 @@ class ModelOut(BaseModel):
     id: str
     label: str
     is_default: bool = False
+    #: Global-fallback markers for the other two model roles (coding/strong
+    #: is `is_default` above) — lets the frontend resolve a project's
+    #: unset-role model without a separate endpoint (see SelectModel.tsx).
+    is_default_fast_chat: bool = False
+    is_default_compaction: bool = False
     context_window: int | None = None
 
 
@@ -84,6 +89,8 @@ async def list_models():
             id=mid,
             label=_label(entry),
             is_default=(mid == settings.ollama_strong_model),
+            is_default_fast_chat=(mid == settings.ollama_fast_model),
+            is_default_compaction=(mid == settings.ollama_compaction_model),
             context_window=window,
         )
         for entry, mid, window in zip(entries, ids, windows, strict=True)
