@@ -546,7 +546,9 @@ class FrontendLintTool(_CheckTool):
     name = "frontend_lint"
     readonly = True
     description = (
-        "Run ESLint on the frontend/ directory of the linked repository. "
+        "Run ESLint on the linked repository's JS/TS project (auto-detected by "
+        "package.json — the repo root or whichever subdirectory has one, e.g. "
+        "frontend/, client/, or the repo root itself for a flat project). "
         "Returns 'no problems found' or the list of lint errors with file:line."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
@@ -557,9 +559,10 @@ class FrontendTypecheckTool(_CheckTool):
     name = "frontend_typecheck"
     readonly = True
     description = (
-        "Run the TypeScript compiler (tsc --noEmit) on the frontend/ directory "
-        "of the linked repository. Returns 'no type errors' or the list of "
-        "type errors with file:line."
+        "Run the TypeScript compiler (tsc --noEmit) on the linked repository's "
+        "JS/TS project (auto-detected by package.json — the repo root or "
+        "whichever subdirectory has one). Returns 'no type errors' or the list "
+        "of type errors with file:line."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
     check_fn = staticmethod(checks.frontend_typecheck)
@@ -569,8 +572,11 @@ class BackendLintTool(_CheckTool):
     name = "backend_lint"
     readonly = True
     description = (
-        "Run ruff (Python linter) on the backend/ directory of the linked "
-        "repository. Returns 'no lint errors' or the list of issues with file:line."
+        "Run ruff (Python linter) on the linked repository's Python project "
+        "(auto-detected by pyproject.toml/requirements.txt/setup.py/setup.cfg — "
+        "the repo root or whichever subdirectory has one, e.g. backend/, "
+        "server/, or the repo root itself). Returns 'no lint errors' or the "
+        "list of issues with file:line."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
     check_fn = staticmethod(checks.backend_lint)
@@ -580,8 +586,9 @@ class BackendTypecheckTool(_CheckTool):
     name = "backend_typecheck"
     readonly = True
     description = (
-        "Run mypy (Python type checker) on the backend/app/ directory of the "
-        "linked repository. Returns 'no type errors' or the list of type errors."
+        "Run mypy (Python type checker) on the linked repository's Python "
+        "project (auto-detected the same way as backend_lint). Returns 'no "
+        "type errors' or the list of type errors."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
     check_fn = staticmethod(checks.backend_typecheck)
@@ -591,8 +598,9 @@ class BackendTestsTool(_CheckTool):
     name = "backend_tests"
     readonly = True
     description = (
-        "Run the backend test suite (pytest) for the linked repository. "
-        "Returns 'all tests passed' or the first failure with a short traceback."
+        "Run the Python test suite (pytest) for the linked repository's Python "
+        "project (auto-detected the same way as backend_lint). Returns 'all "
+        "tests passed' or the first failure with a short traceback."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
     check_fn = staticmethod(checks.backend_tests)
