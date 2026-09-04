@@ -130,6 +130,137 @@ async def test_run_turn_cancels_when_stop_fires_before_yield():
     assert events[-1][0] == "cancelled"
 
 
+# --- run_turn / OllamaTextChat: forced connection close on Stop --------------
+# Regression: checking a cancel flag between stream chunks only stops THIS
+# process from reading further — the openai sync client's blocking network
+# read runs on a worker thread with no way to notice `cancel` on its own, so
+# Ollama kept generating the full response regardless (confirmed live: GPU
+# stayed pinned at ~100% for 30+ seconds after Stop). `OllamaTextChat.abort()`
+# force-closes the in-flight httpx response; `run_turn` must call it.
+
+
+class _FakeLLM:
+    def __init__(self):
+        self.abort_calls = 0
+
+    def abort(self):
+        self.abort_calls += 1
+
+
+class _AssistantWithLLM:
+    def __init__(self, llm, *, delay=0.0, text="hi"):
+        self.llm = llm
+        self._delay = delay
+        self._text = text
+
+    def run(self, messages, **kwargs):
+        if self._delay:
+            time.sleep(self._delay)
+        yield [{"role": "assistant", "content": self._text}]
+
+
+async def test_run_turn_aborts_llm_connection_when_cancelled():
+    llm = _FakeLLM()
+    cancel = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.3, cancel.set)
+
+    async def emit(name, data):
+        pass
+
+    status = await qa.run_turn(
+        model="m", system="s", history=[], emit=emit, cancel=cancel,
+        assistant=_AssistantWithLLM(llm, delay=2.0),
+    )
+    assert status == "cancelled"
+    assert llm.abort_calls == 1
+
+
+async def test_run_turn_aborts_llm_connection_even_on_normal_completion():
+    """Always called (safe no-op on an already-closed response) — simplest
+    to reason about than trying to skip it only on the happy path."""
+    llm = _FakeLLM()
+    status, _events = await _collect({"assistant": _AssistantWithLLM(llm)})
+    assert status == "done"
+    assert llm.abort_calls == 1
+
+
+async def test_run_turn_tolerates_assistant_without_llm_abort():
+    """FakeAssistant (used throughout this file) has no `.llm` at all —
+    confirms run_turn's abort call is a safe no-op, not a hard dependency."""
+    fake = FakeAssistant(yields=[[{"role": "assistant", "content": "hi"}]])
+    status, _events = await _collect({"assistant": fake})
+    assert status == "done"
+
+
+class _FakeHttpxResponse:
+    def __init__(self, *, raise_on_close=False):
+        self.closed = 0
+        self._raise_on_close = raise_on_close
+
+    def close(self):
+        self.closed += 1
+        if self._raise_on_close:
+            raise RuntimeError("connection already gone")
+
+
+def test_ollama_text_chat_abort_closes_active_response(monkeypatch):
+    monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
+    llm = qa.build_llm("qwen3.8:27b-longctx")
+    resp = _FakeHttpxResponse()
+    llm._active_response = resp
+
+    llm.abort()
+
+    assert resp.closed == 1
+    assert llm._active_response is None
+
+
+def test_ollama_text_chat_abort_is_noop_when_nothing_active(monkeypatch):
+    monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
+    llm = qa.build_llm("qwen3.8:27b-longctx")
+    llm.abort()  # must not raise
+    assert llm._active_response is None
+
+
+def test_ollama_text_chat_abort_swallows_close_errors(monkeypatch):
+    monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
+    llm = qa.build_llm("qwen3.8:27b-longctx")
+    resp = _FakeHttpxResponse(raise_on_close=True)
+    llm._active_response = resp
+
+    llm.abort()  # must not raise even though close() does
+
+    assert resp.closed == 1
+    assert llm._active_response is None
+
+
+def test_reasoning_shim_captures_active_response_when_streaming(monkeypatch):
+    monkeypatch.setattr(qa, "get_settings", lambda: _FakeSettings())
+    llm = qa.build_llm("qwen3.8:27b-longctx")
+
+    class FakeStreamResponse:
+        """Stand-in for openai's `Stream` object: an iterator (like
+        `_ReasoningStream` wraps via `next(self._inner)`), holds `.response`
+        (the underlying httpx.Response `abort()` needs to force-close)."""
+        def __init__(self, httpx_response):
+            self.response = httpx_response
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise StopIteration
+
+    httpx_response = _FakeHttpxResponse()
+    llm._chat_complete_create = llm._with_reasoning_shim(lambda *a, **k: FakeStreamResponse(httpx_response))
+
+    stream = llm._chat_complete_create(model="m", messages=[], stream=True)
+
+    assert llm._active_response is httpx_response
+    list(stream)  # drain — must not raise
+
+
 async def test_run_turn_skips_function_results():
     # Real FnCallAgent yield progression: [a1] → [a1, f1] → [a1, f1, a2]
     # → final [a1, f1, a2]. Never the input history; FUNCTION content must

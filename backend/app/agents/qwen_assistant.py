@@ -120,6 +120,10 @@ class OllamaTextChat(TextChatAtOAI):
     def __init__(self, cfg: dict | None = None):
         super().__init__(cfg)
         self.last_usage: dict | None = None
+        # The in-flight httpx response for the CURRENT streaming call, if
+        # any — set here so `abort()` can force-close it from outside the
+        # worker thread that's blocked reading it (see `abort` docstring).
+        self._active_response: object | None = None
         inner = self._chat_complete_create
         self._chat_complete_create = self._with_reasoning_shim(inner)
 
@@ -127,12 +131,35 @@ class OllamaTextChat(TextChatAtOAI):
         def wrapped(*args, **kwargs):
             response = inner(*args, **kwargs)
             if kwargs.get("stream"):
+                self._active_response = getattr(response, "response", None)
                 return _ReasoningStream(response, self)
             _copy_reasoning(response)
             self._capture_usage(response)
             return response
 
         return wrapped
+
+    def abort(self) -> None:
+        """Force-close the in-flight Ollama HTTP connection, if any.
+
+        `openai`'s sync client runs the actual request on a worker thread
+        (see `run_turn`'s `loop.run_in_executor`), blocked on a plain
+        network read with no cooperative-cancellation hook — checking a
+        cancel flag between stream chunks (the old approach) only stops
+        THIS PROCESS from reading further; Ollama itself has no idea the
+        client stopped caring and keeps generating the full response
+        regardless (confirmed: GPU stayed pinned at ~100% for 30+ seconds
+        after Stop with no connection close). `httpx.Response.close()` is
+        safe to call from a different thread than the one reading it — this
+        is what actually makes Ollama notice the disconnect and stop.
+        """
+        response = self._active_response
+        self._active_response = None
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass  # best-effort — must never crash the cancellation path
 
     def _capture_usage(self, response: object) -> None:
         """Keep the last usage block with usable `prompt_tokens` (the final
@@ -431,6 +458,14 @@ async def run_turn(
                 error = payload  # type: ignore[assignment]
                 break
     finally:
+        # Force-close the in-flight Ollama connection FIRST, before waiting
+        # on the worker thread — it's blocked on a plain network read with
+        # no way to notice `cancel` on its own (see OllamaTextChat.abort).
+        # Safe/no-op when the turn ended normally (already-closed response)
+        # or `assistant.llm` isn't a real OllamaTextChat (test-seam fakes).
+        abort = getattr(getattr(assistant, "llm", None), "abort", None)
+        if callable(abort):
+            abort()
         if not task.done():
             task.cancel()
         try:
