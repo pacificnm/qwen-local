@@ -20,6 +20,9 @@ export interface Model {
 
 export interface AuthUser {
   username: string;
+  name: string | null;
+  email: string | null;
+  picture: string | null;
 }
 
 export interface HealthReport {
@@ -48,16 +51,6 @@ async function handle<T>(res: Response): Promise<T> {
     throw new ApiError(res.status, typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   return (await res.json()) as T;
-}
-
-export async function login(username: string, password: string): Promise<AuthUser> {
-  const res = await fetch(`${BASE}/auth/login`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
-  return handle<AuthUser>(res);
 }
 
 export async function me(): Promise<AuthUser> {

@@ -182,6 +182,171 @@ label {
   font-size: 0.9rem;
 }
 
+/* App launcher (waffle menu) + profile menu — the header's shared-chrome
+   elements, matching identity.folding-os.com and every other app's AppHeader
+   (same --bg/--border/--text/--accent tokens; this app is where those
+   values originated). */
+.app-launcher,
+.profile-menu {
+  position: relative;
+  display: flex;
+}
+
+.app-launcher-btn,
+.profile-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.app-launcher-btn:hover {
+  color: var(--text);
+  background: var(--bg-elev);
+}
+
+.app-launcher-btn .codicon {
+  font-size: 1.1rem;
+}
+
+.app-launcher-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  width: 18rem;
+  padding: 0.75rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.4);
+}
+
+.app-launcher-empty {
+  margin: 0;
+  padding: 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.app-launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.25rem;
+}
+
+.app-launcher-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  color: var(--text);
+  text-align: center;
+  text-decoration: none;
+  border-radius: 8px;
+}
+
+.app-launcher-item:hover {
+  background: var(--bg-elev);
+}
+
+.app-launcher-icon {
+  font-size: 1.4rem;
+}
+
+.profile-menu-btn {
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.profile-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--bg-elev);
+}
+
+.profile-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: 13rem;
+  padding: 0.25rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.4);
+}
+
+.profile-menu-header {
+  padding: 0.5rem 0.6rem;
+}
+
+.profile-menu-name {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.profile-menu-email {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.profile-menu-sep {
+  height: 1px;
+  margin: 0.25rem 0;
+  background: var(--border);
+}
+
+.profile-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  color: var(--text);
+  font-size: 0.85rem;
+  text-align: left;
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.profile-menu-item:hover {
+  background: var(--bg-elev);
+}
+
+.profile-menu-item .codicon {
+  color: var(--text-dim);
+  font-size: 0.95rem;
+}
+
 /* Default template — Shell.tsx overrides it inline with persisted widths
    (left/resizer/center/resizer/right). */
 .panes {

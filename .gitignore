@@ -1,6 +1,7 @@
 # Secrets — never commit
 .env
 searxng/searxng.env
+.github_token
 
 # Python
 __pycache__/

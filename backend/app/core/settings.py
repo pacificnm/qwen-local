@@ -44,12 +44,24 @@ class Settings(BaseSettings):
     app_env: str = "development"
     # Signs/validates the session cookie; must be a long random string in production.
     secret_key: str = "dev-secret-key-change-me"
-    # Single shared account seeded by scripts/init_db.py (argon2id).
+    # Single shared account seeded by scripts/init_db.py (argon2id). Retired
+    # as a login path (see app/api/auth.py) but left here — nothing else
+    # reads these, and init_db.py's seeding stays harmless either way.
     admin_username: str = "admin"
     admin_password: str = "change-me-on-first-boot"
     session_max_age_days: int = 30
     login_rate_limit_per_min: int = 10
     cookie_name: str = "session"
+
+    # --- SSO (identity.folding-os.com) ---
+    # client_secret comes from:
+    #   docker compose exec identity-backend python scripts/manage.py create-client \
+    #     --client-id chat --name chat.folding-os.com \
+    #     --redirect-uri https://chat.folding-os.com/api/auth/callback \
+    #     --redirect-uri http://192.168.88.10:3000/api/auth/callback   (LAN testing)
+    identity_issuer: str = "https://identity.folding-os.com"
+    identity_client_id: str = "chat"
+    identity_client_secret: str = ""
 
     # --- Database (host PostgreSQL + pgvector; on-host runs use localhost) ---
     database_url: str = "postgresql+asyncpg://qwen_chat:qwen_chat@localhost:5432/qwen_chat_db"

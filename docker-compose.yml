@@ -25,6 +25,8 @@ services:
   backend:
     build:
       context: ./backend
+      secrets:
+        - github_token
     image: qwen-chat-backend:latest
     container_name: chat
     restart: unless-stopped
@@ -109,6 +111,10 @@ services:
     image: qwen-code-sandbox:latest
     profiles:
       - build-only
+
+secrets:
+  github_token:
+    file: ./.github_token
 
 networks:
   qwen:

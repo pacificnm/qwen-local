@@ -4,6 +4,7 @@ import { useAuth } from "../store/auth";
 import { useModels } from "../store/models";
 import { useChat } from "../store/chat";
 import { useProjects } from "../store/projects";
+import AppHeader from "./AppHeader";
 import ConversationList from "./conversation/List";
 import MainPane from "./MainPane";
 import EditorPane from "./editor/EditorPane";
@@ -149,22 +150,11 @@ export default function Shell() {
     );
   }
 
+  if (!user) return null;
+
   return (
     <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="logo" aria-hidden>
-            ◈
-          </span>
-          Qwen Chat
-        </div>
-        <div className="topbar-right">
-          <span className="user-chip">{user}</span>
-          <button onClick={() => void logout()}>
-            Log out
-          </button>
-        </div>
-      </header>
+      <AppHeader user={user} onLogout={() => void logout()} />
 
       <div
         className="panes"

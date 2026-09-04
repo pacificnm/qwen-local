@@ -25,9 +25,16 @@ RUN apt-get update \
     && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
     && rm -rf /tmp/docker /tmp/docker.tgz
 
-# Install deps first for layer caching
+# Install deps first for layer caching. foldingos-api-core is a private
+# repo; the GitHub PAT is injected as a BuildKit secret, used only for this
+# layer, and unset before the layer is committed so it never lands in the
+# image:
+#   docker build --secret id=github_token,env=GITHUB_TOKEN .
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" \
+    && pip install --no-cache-dir -r requirements.txt \
+    && git config --global --unset url."https://$(cat /run/secrets/github_token)@github.com/".insteadOf
 
 COPY app ./app
 COPY scripts ./scripts

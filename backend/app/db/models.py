@@ -33,9 +33,22 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(512))
+    # Legacy password login is retired (see app/api/auth.py) — column and
+    # data stay in place, unused, rather than deleted.
+    password_hash: Mapped[str | None] = mapped_column(String(512), default=None)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Set once, by a one-time data migration, linking this row to the
+    # matching identity.folding-os.com account. Nullable because this
+    # single-account app predates SSO; there is deliberately no
+    # auto-create-on-first-login (see app/api/auth.py).
+    identity_sub: Mapped[str | None] = mapped_column(String(36), unique=True, index=True, default=None)
+    # Cached from the id_token on each login, purely for display (the header
+    # profile menu) — never used for authorization.
+    name: Mapped[str | None] = mapped_column(String(255), default=None)
+    email: Mapped[str | None] = mapped_column(String(255), default=None)
+    picture_url: Mapped[str | None] = mapped_column(String(1024), default=None)
 
     sessions: Mapped[list["Session"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
