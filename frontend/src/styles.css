@@ -259,7 +259,9 @@ label {
 }
 
 .app-launcher-icon {
-  font-size: 1.4rem;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
 }
 
 .profile-menu-btn {

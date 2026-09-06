@@ -75,7 +75,7 @@ function AppLauncher() {
             <div className="app-launcher-grid">
               {apps.map((app) => (
                 <a key={app.slug} href={app.url} className="app-launcher-item">
-                  <span className="app-launcher-icon">{app.icon}</span>
+                  <img src={app.icon} alt="" className="app-launcher-icon" />
                   <span>{app.name}</span>
                 </a>
               ))}
